@@ -24,14 +24,9 @@ export async function middleware(request: NextRequest) {
 
   const { data: { session } } = await supabase.auth.getSession()
 
-  // HA NINCS BEJELENTKEZVE ÉS NEM A LOGIN OLDALON VAN -> ÁTIRÁNYÍTÁS
+  // Ha nem bejelentkezett és nem a login oldalon van -> átirányítás login-ra
   if (!session && !request.nextUrl.pathname.startsWith('/login')) {
     return NextResponse.redirect(new URL('/login', request.url))
-  }
-
-  // HA BE VAN JELENTKEZVE ÉS A LOGIN-RA MENNE -> MEHET A FŐOLDALRA
-  if (session && request.nextUrl.pathname.startsWith('/login')) {
-    return NextResponse.redirect(new URL('/', request.url))
   }
 
   return response
