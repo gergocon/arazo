@@ -23,8 +23,7 @@ export default function LoginPage() {
       setError("Hibás email vagy jelszó!");
       setLoading(false);
     } else {
-      router.push('/');
-      router.refresh();
+      window.location.href = '/';
     }
   };
 
