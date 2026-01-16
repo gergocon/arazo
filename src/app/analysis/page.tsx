@@ -46,13 +46,18 @@ export default function AnalysisPage() {
       const { data: prices } = await query;
 
       // Adatok formázása a grafikon számára
-      const chartData = prices?.map(p => ({
-        date: new Date(p.created_at).toLocaleDateString('hu-HU'),
-        price: p.unit_price,
-        name: p.materials?.name
-      }));
+const chartData = prices?.map(p => {
+  // Megnézzük, hogy a p.materials tömb-e vagy objektum
+  const materialInfo = Array.isArray(p.materials) ? p.materials[0] : p.materials;
+  
+  return {
+    date: new Date(p.created_at).toLocaleDateString('hu-HU'),
+    price: p.unit_price,
+    name: materialInfo?.name || 'Ismeretlen anyag'
+  };
+});
 
-      setData(chartData || []);
+setData(chartData || []);
     } finally {
       setLoading(false);
     }
