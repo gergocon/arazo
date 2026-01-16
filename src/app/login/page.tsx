@@ -12,21 +12,32 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
+  // src/app/login/page.tsx - Módosított hibakeresés
+const handleLogin = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setLoading(true);
+  setError(null);
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-if (error) {
-  setError(error.message); // Így a pontos hibaüzenetet fogod látni (pl. Invalid login credentials)
-  setLoading(false);
-} else if (data.user) {
-  // A router helyett teljes oldal-újratöltést használunk az éles sütik miatt
-  window.location.assign('/'); 
-}
-  };
+  if (error) {
+    console.error("Login hiba:", error.message);
+    setError(`Hiba: ${error.message}`);
+    setLoading(false);
+  } else {
+    console.log("Sikeres belépés, user:", data.user);
+    // Próbáljuk meg lekérni a sessiont azonnal, hogy látjuk-e
+    const { data: { session } } = await supabase.auth.getSession();
+    console.log("Session állapota:", session ? "Van session" : "Nincs session!");
+    
+    if (session) {
+      window.location.href = '/';
+    } else {
+      setError("A belépés sikeres, de a munkamenet nem jött létre. Ellenőrizd a böngésző sütiket!");
+      setLoading(false);
+    }
+  }
+};
 
   return (
     <div className="min-h-screen bg-[#f7f7f3] flex items-center justify-center p-6 font-sans">
