@@ -26,17 +26,17 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // FONTOS: getUser-t használunk, ami lekéri a friss adatokat a szerverről
+  // FONTOS: getUser-t használunk, mert ez validálja a sütit a szerverrel
   const { data: { user } } = await supabase.auth.getUser()
 
   const isLoginPage = request.nextUrl.pathname === '/login'
 
-  // Ha nincs user és nem a loginon van -> irány a login
+  // HA NINCS USER: Csak a /login-t érheti el
   if (!user && !isLoginPage) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Ha van user és a loginon van -> irány a főoldal
+  // HA VAN USER: Nem mehet a /login-ra, irány a főoldal
   if (user && isLoginPage) {
     return NextResponse.redirect(new URL('/', request.url))
   }
