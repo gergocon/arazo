@@ -17,14 +17,15 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-    if (error) {
-      setError("Hibás email vagy jelszó!");
-      setLoading(false);
-    } else {
-      window.location.href = '/';
-    }
+if (error) {
+  setError(error.message); // Így a pontos hibaüzenetet fogod látni (pl. Invalid login credentials)
+  setLoading(false);
+} else if (data.user) {
+  // A router helyett teljes oldal-újratöltést használunk az éles sütik miatt
+  window.location.assign('/'); 
+}
   };
 
   return (

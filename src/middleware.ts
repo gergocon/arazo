@@ -1,4 +1,3 @@
-// src/middleware.ts - Frissített, stabilabb verzió
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
@@ -14,24 +13,30 @@ export async function middleware(request: NextRequest) {
       cookies: {
         get(name: string) { return request.cookies.get(name)?.value },
         set(name: string, value: string, options: any) {
+          request.cookies.set({ name, value, ...options })
+          response = NextResponse.next({ request: { headers: request.headers } })
           response.cookies.set({ name, value, ...options })
         },
         remove(name: string, options: any) {
+          request.cookies.set({ name, value: '', ...options })
+          response = NextResponse.next({ request: { headers: request.headers } })
           response.cookies.set({ name, value: '', ...options })
         },
       },
     }
   )
 
-  // Itt a getUser-t használjuk getSession helyett, mert ez biztonságosabb élesben
+  // FONTOS: getUser-t használunk, ami lekéri a friss adatokat a szerverről
   const { data: { user } } = await supabase.auth.getUser()
 
-  const isLoginPage = request.nextUrl.pathname.startsWith('/login')
+  const isLoginPage = request.nextUrl.pathname === '/login'
 
+  // Ha nincs user és nem a loginon van -> irány a login
   if (!user && !isLoginPage) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
+  // Ha van user és a loginon van -> irány a főoldal
   if (user && isLoginPage) {
     return NextResponse.redirect(new URL('/', request.url))
   }
