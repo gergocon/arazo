@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   Upload, FileText, Loader2, ArrowRight, Clock, Filter, X 
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-export default function InvoicesPage() {
+function InvoicesContent() {
   const [uploading, setUploading] = useState(false);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -148,5 +148,17 @@ export default function InvoicesPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function InvoicesPage() {
+  return (
+    <Suspense fallback={
+      <div className="h-[80vh] w-full flex items-center justify-center">
+        <Loader2 className="animate-spin text-[#989168]" size={40} />
+      </div>
+    }>
+      <InvoicesContent />
+    </Suspense>
   );
 }
