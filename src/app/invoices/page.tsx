@@ -3,8 +3,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
-  Upload, FileText, Loader2, AlertCircle, 
-  ArrowRight, Clock, Plus, Filter, X 
+  Upload, FileText, Loader2, ArrowRight, Clock, Filter, X 
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
@@ -120,7 +119,7 @@ export default function InvoicesPage() {
         </div>
 
         <div className="lg:col-span-2 bg-white rounded-[3.5rem] shadow-xl border border-[#e7e8dd] overflow-hidden">
-          <div className="p-8 border-b boarder-[#f7f7f3] bg-[#f7f7f3]/50 flex justify-between items-center">
+          <div className="p-8 border-b border-[#f7f7f3] bg-[#f7f7f3]/50 flex justify-between items-center">
             <span className="text-[10px] font-black text-[#b6b693] uppercase tracking-widest italic">Előzmények</span>
             <span className="bg-white px-3 py-1 rounded-lg text-[9px] font-black text-[#989168] border border-[#e7e8dd]">{invoices.length} SZÁMLA</span>
           </div>

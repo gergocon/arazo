@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   TrendingDown, TrendingUp, Tag, LayoutGrid, List, Trophy, Loader2, Search,
-  Filter, ChevronDown, ChevronUp, X, ArrowUpDown, Calendar, Pencil, AlertTriangle, Check, BadgeCheck
+  Filter, ChevronDown, ChevronUp, X, ArrowUpDown, Pencil, AlertTriangle, Check, BadgeCheck
 } from 'lucide-react';
 
 export default function CatalogPage() {

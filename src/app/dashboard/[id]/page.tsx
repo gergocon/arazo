@@ -9,11 +9,6 @@ import {
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
-// ROMÁN -> MAGYAR MÉRTÉKEGYSÉG FORDÍTÓ
-const unitMap: { [key: string]: string } = {
-  'buc': 'db', 'buc.': 'db', 'kg': 'kg', 'm': 'fm', 'ml': 'fm', 'mp': 'm2', 'set': 'szett', 'to': 'tonna'
-};
-
 interface PageProps {
   params: Promise<{ id: string }>;
 }
