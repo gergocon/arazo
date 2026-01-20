@@ -25,14 +25,15 @@ export async function POST(request: Request) {
       })
       .eq('id', invoiceId);
 
-    // Tételek mentése mértékegységgel együtt
+    // Tételek mentése mértékegységgel és MÁRKÁVAL együtt
     if (aiResult.items && Array.isArray(aiResult.items)) {
       const itemsToInsert = aiResult.items.map((item: any) => ({
         invoice_id: invoiceId,
         raw_name: item.raw_name,
+        brand: item.brand || null, // ÚJ: Márka mentése
         quantity: item.quantity || 1,
         unit_price: item.unit_price || 0,
-        raw_unit: item.raw_unit || 'buc', // Román mértékegység mentése
+        raw_unit: item.raw_unit || 'buc', 
         status: 'pending'
       }));
       await supabase.from('invoice_items').insert(itemsToInsert);
@@ -52,11 +53,15 @@ async function processWithAssistant(openai: OpenAI, fileId: string) {
     instructions: `Építőipari számla elemző vagy. 
     A feladatod:
     1. Keresd meg a számla kiállítóját (supplier_name).
-    2. Gyűjtsd ki a tételeket: név (raw_name), mennyiség (quantity), egységár (unit_price) és a számlán szereplő mértékegység (raw_unit - pl: buc, kg, ml, mp, m, set).
+    2. Gyűjtsd ki a tételeket.
+    3. FONTOS: Ha a tétel nevében márkanevet találsz (pl. Baumit, Mapei, Rigips, Ytong, Brio, stb.), azt VÁLASZD LE a névről és tedd a "brand" mezőbe! A "raw_name" maradjon tiszta (márka nélküli, ha lehet).
+    
+    Példa: "XPS 30mm BRIO" -> raw_name: "XPS 30mm", brand: "BRIO"
+    
     SZIGORÚAN CSAK TISZTA JSON VÁLASZ:
     {
       "supplier_name": "...",
-      "items": [{ "raw_name": "...", "quantity": 1, "unit_price": 100, "raw_unit": "buc" }]
+      "items": [{ "raw_name": "...", "brand": "...", "quantity": 1, "unit_price": 100, "raw_unit": "buc" }]
     }`,
     tools: [{ type: "file_search" }],
   });

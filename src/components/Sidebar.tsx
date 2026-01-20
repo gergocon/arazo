@@ -9,7 +9,8 @@ import {
   Database, 
   Truck, 
   Settings, 
-  BarChart3 
+  BarChart3,
+  FolderKanban
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -17,6 +18,7 @@ export default function Sidebar() {
 
   const menuItems = [
     { name: 'Vezérlőpult', icon: LayoutDashboard, href: '/' },
+    { name: 'Projektek', icon: FolderKanban, href: '/projects' }, // ÚJ MENÜPONT
     { name: 'Számlák', icon: FileText, href: '/invoices' },
     { name: 'Anyagkatalógus', icon: Database, href: '/catalog' },
     { name: 'Elemzések', icon: BarChart3, href: '/analysis' },
@@ -55,10 +57,10 @@ export default function Sidebar() {
       </nav>
 
       <div className="p-8 border-t border-[#4e4639]">
-        <div className="flex items-center gap-3 text-[#70644d] hover:text-[#f7f7f3] cursor-pointer transition-colors group">
+        <Link href="/settings" className="flex items-center gap-3 text-[#70644d] hover:text-[#f7f7f3] cursor-pointer transition-colors group">
           <Settings size={18} className="group-hover:rotate-90 transition-transform duration-500" />
           <span className="text-xs font-bold uppercase tracking-widest">Beállítások</span>
-        </div>
+        </Link>
       </div>
     </aside>
   );

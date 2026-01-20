@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { 
   TrendingDown, TrendingUp, Tag, LayoutGrid, List, Trophy, Loader2, Search,
-  Filter, ChevronDown, ChevronUp, X, ArrowUpDown, Calendar
+  Filter, ChevronDown, ChevronUp, X, ArrowUpDown, Calendar, Pencil, AlertTriangle, Check, BadgeCheck
 } from 'lucide-react';
 
 export default function CatalogPage() {
@@ -12,10 +12,15 @@ export default function CatalogPage() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   
+  // EDIT STATES
+  const [editingMaterial, setEditingMaterial] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', unit: '', brand: '' });
+  
   // Szűrő és Kereső State-ek
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState({
     supplier: 'all',
+    brand: 'all', // ÚJ: Márka szűrő
     trend: 'all', // 'increasing', 'decreasing', 'stable'
     unit: 'all'
   });
@@ -38,6 +43,31 @@ export default function CatalogPage() {
       setMaterials(data || []);
     } finally { setLoading(false); }
   }
+
+  // --- EDIT FUNCTIONS ---
+  const handleEditClick = (material: any) => {
+    setEditingMaterial(material);
+    setEditForm({ name: material.name, unit: material.unit, brand: material.brand || '' });
+  };
+
+  const handleSaveMaterial = async () => {
+    if (!editingMaterial) return;
+    
+    try {
+      const { error } = await supabase
+        .from('materials')
+        .update({ name: editForm.name, unit: editForm.unit, brand: editForm.brand })
+        .eq('id', editingMaterial.id);
+
+      if (error) throw error;
+
+      // Lista frissítése
+      setMaterials(materials.map(m => m.id === editingMaterial.id ? { ...m, name: editForm.name, unit: editForm.unit, brand: editForm.brand } : m));
+      setEditingMaterial(null);
+    } catch (err: any) {
+      alert("Hiba a mentéskor: " + err.message);
+    }
+  };
 
   // --- HELPER FÜGGVÉNYEK ---
   
@@ -78,6 +108,13 @@ export default function CatalogPage() {
     return Array.from(suppliers).sort();
   }, [materials]);
 
+  // ÚJ: Elérhető márkák
+  const availableBrands = useMemo(() => {
+    const brands = new Set<string>();
+    materials.forEach(m => { if(m.brand) brands.add(m.brand); });
+    return Array.from(brands).sort();
+  }, [materials]);
+
   const availableUnits = useMemo(() => {
     const units = new Set<string>();
     materials.forEach(m => { if(m.unit) units.add(m.unit); });
@@ -90,7 +127,7 @@ export default function CatalogPage() {
     // 1. Keresés
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
-      result = result.filter(m => m.name.toLowerCase().includes(lower));
+      result = result.filter(m => m.name.toLowerCase().includes(lower) || (m.brand && m.brand.toLowerCase().includes(lower)));
     }
 
     // 2. Szűrés
@@ -99,6 +136,9 @@ export default function CatalogPage() {
     }
     if (filters.unit !== 'all') {
       result = result.filter(m => m.unit === filters.unit);
+    }
+    if (filters.brand !== 'all') {
+      result = result.filter(m => m.brand === filters.brand);
     }
     if (filters.trend !== 'all') {
       result = result.filter(m => getTrendStatus(m) === filters.trend);
@@ -152,11 +192,11 @@ export default function CatalogPage() {
   };
 
   const resetFilters = () => {
-    setFilters({ supplier: 'all', trend: 'all', unit: 'all' });
+    setFilters({ supplier: 'all', trend: 'all', unit: 'all', brand: 'all' });
     setSearchTerm('');
   };
 
-  const hasActiveFilters = searchTerm !== '' || filters.supplier !== 'all' || filters.trend !== 'all' || filters.unit !== 'all';
+  const hasActiveFilters = searchTerm !== '' || filters.supplier !== 'all' || filters.trend !== 'all' || filters.unit !== 'all' || filters.brand !== 'all';
 
   return (
     <div className="animate-in fade-in duration-700 pb-20">
@@ -173,7 +213,7 @@ export default function CatalogPage() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#c7c8ad] group-focus-within:text-[#2b251d] transition-colors" size={18} />
             <input 
               type="text" 
-              placeholder="Gyorskeresés..." 
+              placeholder="Keresés név vagy márka szerint..." 
               value={searchTerm}
               className="pl-12 pr-6 py-3 bg-white border border-[#e7e8dd] rounded-2xl shadow-sm outline-none focus:border-[#989168] focus:ring-4 focus:ring-[#f7f7f3] transition-all font-bold text-sm text-[#2b251d] w-full md:w-64" 
               onChange={(e) => setSearchTerm(e.target.value)} 
@@ -203,6 +243,19 @@ export default function CatalogPage() {
           >
             <option value="all">Minden Beszállító</option>
             {availableSuppliers.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#c7c8ad] pointer-events-none" />
+        </div>
+
+        {/* ÚJ: Márka Filter */}
+        <div className="relative group">
+          <select 
+            className="appearance-none bg-[#f7f7f3] hover:bg-[#e7e8dd] pl-4 pr-10 py-2.5 rounded-xl text-xs font-bold text-[#2b251d] outline-none cursor-pointer transition-colors border border-transparent focus:border-[#989168]"
+            value={filters.brand}
+            onChange={(e) => setFilters({...filters, brand: e.target.value})}
+          >
+            <option value="all">Minden Márka</option>
+            {availableBrands.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
           <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#c7c8ad] pointer-events-none" />
         </div>
@@ -259,7 +312,7 @@ export default function CatalogPage() {
       ) : (
         <div className={viewMode === 'grid' ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8" : "bg-white rounded-[2.5rem] overflow-hidden shadow-xl border border-[#e7e8dd]"}>
           {viewMode === 'grid' ? (
-            processedMaterials.map(m => <MaterialCard key={m.id} material={m} getLatestPrice={getLatestPrice} getTrendStatus={getTrendStatus} />)
+            processedMaterials.map(m => <MaterialCard key={m.id} material={m} getLatestPrice={getLatestPrice} getTrendStatus={getTrendStatus} onEdit={handleEditClick} />)
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -270,6 +323,7 @@ export default function CatalogPage() {
                     <th className="p-6 text-right cursor-default">Legjobb Beszállító</th>
                     <SortableHeader label="Trend" sortKey="trend" currentSort={sortConfig} onSort={handleSort} className="text-center" />
                     <SortableHeader label="Utolsó Ár" sortKey="price" currentSort={sortConfig} onSort={handleSort} className="text-right pr-8" />
+                    <th className="p-6"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f7f7f3]">
@@ -280,12 +334,80 @@ export default function CatalogPage() {
                       latestPrice={getLatestPrice(m)} 
                       trend={getTrendStatus(m)}
                       bestSupplier={getBestSupplierName(m)}
+                      onEdit={handleEditClick}
                     />
                   ))}
                 </tbody>
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* EDIT MODAL */}
+      {editingMaterial && (
+        <div className="fixed inset-0 bg-[#2b251d]/40 backdrop-blur-sm flex items-center justify-center p-4 z-[100] overflow-y-auto">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl animate-in zoom-in duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-black uppercase text-[#2b251d]">Anyag Szerkesztése</h2>
+              <button onClick={() => setEditingMaterial(null)} className="text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><X size={20} /></button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Megnevezés</label>
+                <input 
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={editForm.name}
+                  onChange={e => setEditForm({...editForm, name: e.target.value})} 
+                />
+              </div>
+
+              {/* ÚJ: Márka input */}
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Márka</label>
+                <input 
+                  placeholder='pl. Baumit'
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={editForm.brand}
+                  onChange={e => setEditForm({...editForm, brand: e.target.value})} 
+                />
+              </div>
+              
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Mértékegység</label>
+                <select 
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm appearance-none cursor-pointer"
+                  value={editForm.unit}
+                  onChange={e => setEditForm({...editForm, unit: e.target.value})}
+                >
+                  <option value="db">Darab (db)</option>
+                  <option value="kg">Kilogramm (kg)</option>
+                  <option value="m2">Négyzetméter (m2)</option>
+                  <option value="m3">Köbméter (m3)</option>
+                  <option value="fm">Folyóméter (fm)</option>
+                  <option value="zsák">Zsák</option>
+                  <option value="szett">Szett</option>
+                </select>
+              </div>
+
+              {/* Warning box */}
+              {editForm.unit !== editingMaterial.unit && (
+                <div className="bg-yellow-50 border border-yellow-100 p-4 rounded-xl flex items-start gap-3 text-yellow-700">
+                  <AlertTriangle size={18} className="mt-0.5 flex-shrink-0" />
+                  <p className="text-xs font-bold leading-relaxed">
+                    A mértékegység módosítása nem váltja át automatikusan a korábbi mennyiségeket! Csak a megjelenítés változik.
+                  </p>
+                </div>
+              )}
+
+              <div className="pt-4">
+                <button onClick={handleSaveMaterial} className="w-full py-4 bg-[#2b251d] text-white font-black rounded-xl hover:bg-[#4e4639] transition-all uppercase tracking-widest text-xs flex justify-center items-center gap-2">
+                  <Check size={16} /> Mentés
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -311,7 +433,7 @@ function SortableHeader({ label, sortKey, currentSort, onSort, className = "" }:
   );
 }
 
-function MaterialCard({ material, getLatestPrice, getTrendStatus }: any) {
+function MaterialCard({ material, getLatestPrice, getTrendStatus, onEdit }: any) {
   const lastPrice = getLatestPrice(material);
   const trend = getTrendStatus(material);
   const prices = material.prices || [];
@@ -319,6 +441,15 @@ function MaterialCard({ material, getLatestPrice, getTrendStatus }: any) {
 
   return (
     <div className="bg-white p-8 rounded-[2.5rem] shadow-sm hover:shadow-xl hover:shadow-[#2b251d]/5 transition-all border border-[#e7e8dd] hover:border-[#989168] group relative flex flex-col justify-between h-full animate-in zoom-in duration-300">
+      
+      {/* Edit Button */}
+      <button 
+        onClick={() => onEdit(material)}
+        className="absolute top-6 right-6 p-2 bg-[#f7f7f3] text-[#c7c8ad] rounded-full hover:bg-[#2b251d] hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+      >
+        <Pencil size={14} />
+      </button>
+
       <div>
         <div className="flex justify-between items-start mb-6">
           <div className="bg-[#f7f7f3] text-[#c7c8ad] p-3 rounded-2xl group-hover:bg-[#2b251d] group-hover:text-white transition-all"><Tag size={20} /></div>
@@ -329,7 +460,18 @@ function MaterialCard({ material, getLatestPrice, getTrendStatus }: any) {
             </div>
           )}
         </div>
-        <h3 className="text-xl font-black text-[#2b251d] mb-1 leading-tight group-hover:text-[#989168] transition-colors line-clamp-2">{material.name}</h3>
+        
+        {/* ÚJ: Márka megjelenítése - Badge stílusban */}
+        {material.brand && (
+          <div className="mb-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#2b251d] text-white rounded-lg text-[10px] font-black uppercase tracking-widest shadow-sm">
+              <BadgeCheck size={12} className="text-[#989168]" /> 
+              {material.brand}
+            </span>
+          </div>
+        )}
+        
+        <h3 className="text-xl font-black text-[#2b251d] mb-1 leading-tight group-hover:text-[#989168] transition-colors line-clamp-2 pr-8">{material.name}</h3>
         <p className="text-[#c7c8ad] text-[10px] font-black uppercase tracking-[0.2em] mb-8">{material.unit}</p>
       </div>
       
@@ -345,10 +487,17 @@ function MaterialCard({ material, getLatestPrice, getTrendStatus }: any) {
   );
 }
 
-function MaterialRow({ material, latestPrice, trend, bestSupplier }: any) {
+function MaterialRow({ material, latestPrice, trend, bestSupplier, onEdit }: any) {
   return (
     <tr className="hover:bg-[#fffcf5] transition-colors group border-b border-[#f7f7f3] last:border-none">
-      <td className="p-6 pl-8 font-bold text-[#2b251d] group-hover:text-[#989168] transition-colors text-sm">{material.name}</td>
+      <td className="p-6 pl-8 font-bold text-[#2b251d] group-hover:text-[#989168] transition-colors text-sm">
+        {material.name}
+        {material.brand && (
+          <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-black text-[#989168] uppercase tracking-wider bg-[#f7f7f3] px-2 py-0.5 rounded-md">
+            <BadgeCheck size={10} /> {material.brand}
+          </span>
+        )}
+      </td>
       <td className="p-6 text-center text-[#b6b693] text-[10px] font-black tracking-widest uppercase">{material.unit}</td>
       <td className="p-6 text-right">
         <p className="text-xs font-bold text-[#4e4639]">{bestSupplier}</p>
@@ -362,6 +511,9 @@ function MaterialRow({ material, latestPrice, trend, bestSupplier }: any) {
          )}
       </td>
       <td className="p-6 pr-8 text-right font-black text-[#2b251d] text-base">{latestPrice.toLocaleString()} RON</td>
+      <td className="p-6 pr-8 text-right">
+        <button onClick={() => onEdit(material)} className="text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><Pencil size={14} /></button>
+      </td>
     </tr>
   );
 }

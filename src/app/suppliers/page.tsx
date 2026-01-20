@@ -11,7 +11,10 @@ import {
   Loader2, 
   ChevronRight,
   ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  Pencil,
+  X,
+  Check
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -19,6 +22,11 @@ export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+
+  // EDIT STATE
+  const [editingSupplier, setEditingSupplier] = useState<string | null>(null);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
     fetchSuppliersData();
@@ -69,6 +77,34 @@ export default function SuppliersPage() {
     }
   }
 
+  const handleEditClick = (name: string) => {
+    setEditingSupplier(name);
+    setNewSupplierName(name);
+  };
+
+  const handleRename = async () => {
+    if (!editingSupplier || !newSupplierName || newSupplierName === editingSupplier) return;
+    
+    setIsUpdating(true);
+    try {
+      // Tömeges frissítés: minden számlán átírjuk a nevet
+      const { error } = await supabase
+        .from('invoices')
+        .update({ supplier_name: newSupplierName })
+        .eq('supplier_name', editingSupplier);
+
+      if (error) throw error;
+
+      // Lista újratöltése
+      await fetchSuppliersData();
+      setEditingSupplier(null);
+    } catch (err: any) {
+      alert("Hiba az átnevezéskor: " + err.message);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const filteredSuppliers = suppliers.filter(s => 
     s.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -106,7 +142,7 @@ export default function SuppliersPage() {
         <div className="grid grid-cols-1 gap-6">
           {filteredSuppliers.length > 0 ? (
             filteredSuppliers.map((supplier, index) => (
-              <SupplierCard key={supplier.name} supplier={supplier} rank={index + 1} />
+              <SupplierCard key={supplier.name} supplier={supplier} rank={index + 1} onEdit={handleEditClick} />
             ))
           ) : (
             <div className="bg-white rounded-[2.5rem] p-20 text-center border-4 border-dashed border-[#e7e8dd]">
@@ -116,13 +152,50 @@ export default function SuppliersPage() {
           )}
         </div>
       )}
+
+      {/* EDIT MODAL */}
+      {editingSupplier && (
+        <div className="fixed inset-0 bg-[#2b251d]/40 backdrop-blur-sm flex items-center justify-center p-4 z-[100] overflow-y-auto">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-sm p-8 shadow-2xl animate-in zoom-in duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-black uppercase text-[#2b251d]">Beszállító Átnevezése</h2>
+              <button onClick={() => setEditingSupplier(null)} className="text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><X size={20} /></button>
+            </div>
+            
+            <div className="space-y-4">
+              <p className="text-xs text-[#b6b693] font-bold">Ez a művelet frissíti a beszállító nevét az összes ("{editingSupplier}") névvel rögzített számlán.</p>
+              
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Új név</label>
+                <input 
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newSupplierName}
+                  onChange={e => setNewSupplierName(e.target.value)} 
+                  autoFocus
+                />
+              </div>
+
+              <div className="pt-2">
+                <button 
+                  onClick={handleRename} 
+                  disabled={isUpdating}
+                  className="w-full py-4 bg-[#2b251d] text-white font-black rounded-xl hover:bg-[#4e4639] transition-all uppercase tracking-widest text-xs flex justify-center items-center gap-2 disabled:opacity-50"
+                >
+                  {isUpdating ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />} 
+                  {isUpdating ? 'Frissítés...' : 'Átnevezés'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function SupplierCard({ supplier, rank }: { supplier: any, rank: number }) {
+function SupplierCard({ supplier, rank, onEdit }: { supplier: any, rank: number, onEdit: (name: string) => void }) {
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-[#2b251d]/5 border border-[#e7e8dd] hover:border-[#989168] transition-all group flex flex-col md:flex-row items-center gap-8">
+    <div className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-[#2b251d]/5 border border-[#e7e8dd] hover:border-[#989168] transition-all group flex flex-col md:flex-row items-center gap-8 relative">
       {/* RANG ÉS IKON */}
       <div className="flex items-center gap-6">
         <div className="text-4xl font-black text-[#e7e8dd] group-hover:text-[#989168] transition-colors italic w-12 text-center">
@@ -135,7 +208,15 @@ function SupplierCard({ supplier, rank }: { supplier: any, rank: number }) {
 
       {/* NÉV ÉS INFÓ */}
       <div className="flex-1 text-center md:text-left">
-        <h3 className="text-2xl font-black text-[#2b251d] uppercase tracking-tighter mb-1">{supplier.name}</h3>
+        <div className="flex items-center justify-center md:justify-start gap-3">
+          <h3 className="text-2xl font-black text-[#2b251d] uppercase tracking-tighter mb-1">{supplier.name}</h3>
+          <button 
+            onClick={(e) => { e.preventDefault(); onEdit(supplier.name); }}
+            className="text-[#c7c8ad] hover:text-[#2b251d] transition-colors opacity-0 group-hover:opacity-100"
+          >
+            <Pencil size={14} />
+          </button>
+        </div>
         <div className="flex flex-wrap justify-center md:justify-start gap-4">
           <span className="flex items-center gap-2 text-[10px] font-black text-[#b6b693] uppercase tracking-widest">
             <FileText size={12} /> {supplier.invoiceCount} feldolgozott számla
