@@ -1,3 +1,4 @@
+
 'use client';
 
 import Link from 'next/link';
@@ -10,7 +11,9 @@ import {
   Truck, 
   Settings, 
   BarChart3,
-  FolderKanban
+  FolderKanban,
+  Users,
+  Briefcase // ÚJ IKON
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -18,7 +21,9 @@ export default function Sidebar() {
 
   const menuItems = [
     { name: 'Vezérlőpult', icon: LayoutDashboard, href: '/' },
-    { name: 'Projektek', icon: FolderKanban, href: '/projects' }, // ÚJ MENÜPONT
+    { name: 'Projektek', icon: FolderKanban, href: '/projects' },
+    { name: 'Munkaerő', icon: Users, href: '/workforce' },
+    { name: 'Alvállalkozók', icon: Briefcase, href: '/subcontractors' }, // ÚJ MENÜPONT
     { name: 'Számlák', icon: FileText, href: '/invoices' },
     { name: 'Anyagkatalógus', icon: Database, href: '/catalog' },
     { name: 'Elemzések', icon: BarChart3, href: '/analysis' },

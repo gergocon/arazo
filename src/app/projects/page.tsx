@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -45,22 +46,48 @@ export default function ProjectsPage() {
 
       if (error) throw error;
 
-      // Költségek kiszámolása projektenként
+      // Költségek kiszámolása projektenként (Anyag + Munkadíj + Alvállalkozók)
       const projectsWithSpent = await Promise.all(projData.map(async (p) => {
-        // Lekérjük a projekthez tartozó számlákat és tételeket
+        // 1. Anyagköltség (Számlákból)
         const { data: invoices } = await supabase
           .from('invoices')
           .select('id, invoice_items(quantity, unit_price)')
           .eq('project_id', p.id);
 
-        let totalSpent = 0;
+        let materialSpent = 0;
         invoices?.forEach((inv: any) => {
           inv.invoice_items?.forEach((item: any) => {
-            totalSpent += (item.quantity || 0) * (item.unit_price || 0);
+            materialSpent += (item.quantity || 0) * (item.unit_price || 0);
           });
         });
 
-        return { ...p, spent: totalSpent };
+        // 2. Munkadíj (Timesheets-ből)
+        const { data: timesheets } = await supabase
+          .from('timesheets')
+          .select('calculated_cost')
+          .eq('project_id', p.id);
+        
+        const laborSpent = timesheets?.reduce((sum, t) => sum + (t.calculated_cost || 0), 0) || 0;
+
+        // 3. Alvállalkozók (Kifizetések) - ÚJ
+        // Először lekérjük a projekthez tartozó jobokat
+        const { data: jobs } = await supabase
+          .from('subcontractor_jobs')
+          .select('id')
+          .eq('project_id', p.id);
+        
+        let subSpent = 0;
+        if (jobs && jobs.length > 0) {
+          const jobIds = jobs.map(j => j.id);
+          const { data: payments } = await supabase
+            .from('subcontractor_payments')
+            .select('amount')
+            .in('job_id', jobIds);
+          
+          subSpent = payments?.reduce((sum, pay) => sum + (pay.amount || 0), 0) || 0;
+        }
+
+        return { ...p, spent: materialSpent + laborSpent + subSpent };
       }));
 
       setProjects(projectsWithSpent);

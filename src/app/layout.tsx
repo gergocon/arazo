@@ -1,4 +1,5 @@
 // src/app/layout.tsx
+import React from 'react';
 import './globals.css';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';

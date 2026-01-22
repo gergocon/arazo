@@ -1,0 +1,35 @@
+
+export interface Worker {
+  id: string;
+  name: string;
+  role: string;
+  hourly_rate: number;
+  status: 'active' | 'inactive';
+  created_at?: string;
+}
+
+export interface Timesheet {
+  id: string;
+  worker_id: string;
+  project_id: string;
+  date: string;
+  hours: number;
+  description?: string;
+  calculated_cost: number;
+  created_at?: string;
+  
+  // Opcionális mezők JOIN lekérdezésekhez
+  workers?: Worker;
+  projects?: {
+    id: string;
+    name: string;
+  };
+}
+
+// Segédtípus a csoportosított nézethez (pl. havi összesítő)
+export interface WorkerStats {
+  worker_id: string;
+  worker_name: string;
+  total_hours: number;
+  total_cost: number;
+}

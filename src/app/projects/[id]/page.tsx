@@ -1,3 +1,4 @@
+
 'use client';
 
 import { use, useEffect, useState } from 'react';
@@ -5,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { 
   ArrowLeft, Calendar, MapPin, Wallet, 
   TrendingUp, FileText, Package, Check, Loader2, ArrowRight, PieChart, 
-  Pencil, X, Plus, Trash2, Save
+  Pencil, X, Plus, Trash2, Save, Clock, HardHat, Briefcase, FileSignature
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -23,6 +24,11 @@ export default function ProjectDetailsPage({ params }: PageProps) {
   const [project, setProject] = useState<any>(null);
   const [categories, setCategories] = useState<any[]>([]);
   const [invoices, setInvoices] = useState<any[]>([]);
+  const [timesheets, setTimesheets] = useState<any[]>([]); 
+  // ÚJ: Alvállalkozói adatok
+  const [subcontractorJobs, setSubcontractorJobs] = useState<any[]>([]);
+  const [allSubcontractors, setAllSubcontractors] = useState<any[]>([]);
+
   const [spent, setSpent] = useState(0);
   const [materials, setMaterials] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +41,12 @@ export default function ProjectDetailsPage({ params }: PageProps) {
     status: '',
     categories: [] as any[]
   });
+
+  // SUBCONTRACTOR MODALS
+  const [isJobModalOpen, setIsJobModalOpen] = useState(false);
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [newJob, setNewJob] = useState({ subcontractor_id: '', description: '', agreed_price: '' });
+  const [newPayment, setNewPayment] = useState({ job_id: '', amount: '', note: '' });
 
   useEffect(() => {
     fetchProjectDetails();
@@ -69,22 +81,52 @@ export default function ProjectDetailsPage({ params }: PageProps) {
 
       setInvoices(invs || []);
 
-      // 4. Számítások (Összköltség és Kategória költés)
+      // 4. Timesheets lekérése
+      const { data: ts } = await supabase
+        .from('timesheets')
+        .select('*, workers(name)')
+        .eq('project_id', projectId)
+        .order('date', { ascending: false });
+      
+      setTimesheets(ts || []);
+
+      // 5. Alvállalkozók lekérése (Jobs + Payments)
+      const { data: jobs } = await supabase
+        .from('subcontractor_jobs')
+        .select(`
+          *,
+          subcontractors (name, trade),
+          subcontractor_payments (amount)
+        `)
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false });
+
+      const processedJobs = jobs?.map((j: any) => ({
+        ...j,
+        paid: j.subcontractor_payments?.reduce((sum: number, p: any) => sum + p.amount, 0) || 0
+      })) || [];
+      
+      setSubcontractorJobs(processedJobs);
+
+      // 6. Lista az összes alvállalkozóról (Dropdownhoz)
+      const { data: allSubs } = await supabase.from('subcontractors').select('id, name, trade').eq('status', 'active');
+      setAllSubcontractors(allSubs || []);
+
+      // 7. ÖSSZESÍTETT KÖLTSÉGEK SZÁMÍTÁSA
       let totalSpent = 0;
       const matList: any[] = [];
       const categorySpent: {[key: string]: number} = {};
 
+      // A) ANYAGKÖLTSÉGEK
       invs?.forEach((inv: any) => {
         inv.invoice_items?.forEach((item: any) => {
           const itemCost = (item.quantity || 0) * (item.unit_price || 0);
           totalSpent += itemCost;
           
-          // Kategória költés
           if (item.project_category_id) {
             categorySpent[item.project_category_id] = (categorySpent[item.project_category_id] || 0) + itemCost;
           }
 
-          // Anyaglista gyűjtése
           const existing = matList.find(m => m.name === item.raw_name);
           if (existing) {
             existing.quantity += item.quantity || 0;
@@ -99,6 +141,29 @@ export default function ProjectDetailsPage({ params }: PageProps) {
           }
         });
       });
+
+      // B) MUNKADÍJ KÖLTSÉGEK
+      let totalLaborCost = 0;
+      ts?.forEach((t: any) => {
+        const cost = t.calculated_cost || 0;
+        totalLaborCost += cost;
+      });
+      totalSpent += totalLaborCost;
+
+      // C) ALVÁLLALKOZÓI KIFIZETÉSEK
+      let totalSubPaid = 0;
+      processedJobs.forEach(j => {
+        totalSubPaid += j.paid;
+      });
+      totalSpent += totalSubPaid;
+
+      // Munkadíj és Alvállalkozó költség hozzáadása a kategóriákhoz (név alapján)
+      const laborCat = cats?.find(c => c.name.toLowerCase().includes('munka') || c.name.toLowerCase().includes('labor'));
+      if (laborCat) categorySpent[laborCat.id] = (categorySpent[laborCat.id] || 0) + totalLaborCost;
+
+      // Keresünk "Alvállalkozó" vagy hasonló kategóriát, ha nincs, nem rendeljük hozzá (vagy létrehozhatnánk)
+      const subCat = cats?.find(c => c.name.toLowerCase().includes('alváll') || c.name.toLowerCase().includes('külső'));
+      if (subCat) categorySpent[subCat.id] = (categorySpent[subCat.id] || 0) + totalSubPaid;
 
       // Kategóriák frissítése a költésekkel
       const processedCategories = cats?.map(c => ({
@@ -117,14 +182,13 @@ export default function ProjectDetailsPage({ params }: PageProps) {
     }
   }
 
-  // --- EDIT LOGIKA ---
-
+  // --- EDIT PROJECT FUNCTIONS ---
   const openEditModal = () => {
     setEditForm({
       name: project.name,
       location: project.location,
       status: project.status,
-      categories: categories.map(c => ({...c})) // Deep copy
+      categories: categories.map(c => ({...c}))
     });
     setIsEditModalOpen(true);
   };
@@ -138,78 +202,71 @@ export default function ProjectDetailsPage({ params }: PageProps) {
   const handleAddCategory = () => {
     setEditForm({
       ...editForm,
-      categories: [
-        ...editForm.categories, 
-        { 
-          id: null, // Új elem
-          name: '', 
-          allocated_amount: 0, 
-          spent: 0,
-          color: CATEGORY_COLORS[editForm.categories.length % CATEGORY_COLORS.length] 
-        }
-      ]
+      categories: [...editForm.categories, { id: null, name: '', allocated_amount: 0, spent: 0, color: CATEGORY_COLORS[editForm.categories.length % CATEGORY_COLORS.length] }]
     });
   };
 
   const handleRemoveCategory = async (index: number) => {
     const catToDelete = editForm.categories[index];
-    
-    // Ha van költés rajta, nem engedjük törölni (UI-ban is le van tiltva, de duplán védjük)
-    if (catToDelete.spent > 0) {
-      alert("Nem törölhetsz olyan kategóriát, amin már van könyvelt költség!");
-      return;
-    }
-
-    // Ha van ID-ja (már létezik DB-ben), akkor töröljük onnan is
+    if (catToDelete.spent > 0) return alert("Nem törölhetsz olyan kategóriát, amin már van könyvelt költség!");
     if (catToDelete.id) {
       const { error } = await supabase.from('project_categories').delete().eq('id', catToDelete.id);
-      if (error) {
-        alert("Hiba a törléskor: " + error.message);
-        return;
-      }
+      if (error) return alert("Hiba: " + error.message);
     }
-
-    const newCats = editForm.categories.filter((_: any, i: number) => i !== index);
-    setEditForm({ ...editForm, categories: newCats });
+    setEditForm({ ...editForm, categories: editForm.categories.filter((_: any, i: number) => i !== index) });
   };
 
   const handleSaveProject = async () => {
     try {
-      // 1. Projekt adatok frissítése + Kategóriák összege = Új Budget
       const totalBudget = editForm.categories.reduce((sum: number, c: any) => sum + (parseFloat(c.allocated_amount) || 0), 0);
-
-      const { error: projError } = await supabase.from('projects').update({
-        name: editForm.name,
-        location: editForm.location,
-        status: editForm.status,
-        budget: totalBudget
-      }).eq('id', projectId);
-
-      if (projError) throw projError;
-
-      // 2. Kategóriák Upsert (Frissítés vagy Létrehozás)
+      await supabase.from('projects').update({ name: editForm.name, location: editForm.location, status: editForm.status, budget: totalBudget }).eq('id', projectId);
+      
       for (const cat of editForm.categories) {
-        const payload: any = {
-          project_id: projectId,
-          name: cat.name,
-          allocated_amount: parseFloat(cat.allocated_amount) || 0,
-          color: cat.color
-        };
-        // Ha van ID, akkor update, ha nincs, akkor insert
+        const payload: any = { project_id: projectId, name: cat.name, allocated_amount: parseFloat(cat.allocated_amount) || 0, color: cat.color };
         if (cat.id) payload.id = cat.id;
-
-        const { error: catError } = await supabase.from('project_categories').upsert(payload);
-        if (catError) throw catError;
+        await supabase.from('project_categories').upsert(payload);
       }
-
       setIsEditModalOpen(false);
-      fetchProjectDetails(); // Adatok újratöltése
+      fetchProjectDetails();
+    } catch (error: any) { alert(error.message); }
+  };
 
-    } catch (error: any) {
-      alert("Hiba a mentés során: " + error.message);
+  // --- SUBCONTRACTOR FUNCTIONS ---
+  
+  const handleAddJob = async () => {
+    if (!newJob.subcontractor_id || !newJob.description || !newJob.agreed_price) return alert("Minden mező kötelező!");
+    
+    const { error } = await supabase.from('subcontractor_jobs').insert([{
+      project_id: projectId,
+      subcontractor_id: newJob.subcontractor_id,
+      description: newJob.description,
+      agreed_price: parseFloat(newJob.agreed_price)
+    }]);
+
+    if (error) alert("Hiba: " + error.message);
+    else {
+      setIsJobModalOpen(false);
+      setNewJob({ subcontractor_id: '', description: '', agreed_price: '' });
+      fetchProjectDetails();
     }
   };
 
+  const handleAddPayment = async () => {
+    if (!newPayment.amount) return alert("Összeg kötelező!");
+    
+    const { error } = await supabase.from('subcontractor_payments').insert([{
+      job_id: newPayment.job_id,
+      amount: parseFloat(newPayment.amount),
+      note: newPayment.note
+    }]);
+
+    if (error) alert("Hiba: " + error.message);
+    else {
+      setIsPaymentModalOpen(false);
+      setNewPayment({ job_id: '', amount: '', note: '' });
+      fetchProjectDetails();
+    }
+  };
 
   if (loading) return <div className="flex justify-center py-40"><Loader2 className="animate-spin text-[#989168]" size={32} /></div>;
   if (!project) return <div>Projekt nem található.</div>;
@@ -282,8 +339,8 @@ export default function ProjectDetailsPage({ params }: PageProps) {
               <p className="text-2xl font-black">{invoices.length} <span className="text-sm opacity-50">db</span></p>
             </div>
             <div>
-              <p className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-1">Anyagok</p>
-              <p className="text-2xl font-black">{materials.length} <span className="text-sm opacity-50">típus</span></p>
+              <p className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-1">Alvállalkozók</p>
+              <p className="text-2xl font-black">{subcontractorJobs.length} <span className="text-sm opacity-50">db</span></p>
             </div>
           </div>
         </div>
@@ -330,10 +387,11 @@ export default function ProjectDetailsPage({ params }: PageProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+      {/* --- ALSÓ SZEKCIÓ (GRID) --- */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
         
-        {/* ANYAGLISTA */}
-        <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden">
+        {/* BAL OSZLOP: ANYAGOK */}
+        <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden h-fit">
           <div className="p-8 border-b border-[#f7f7f3] flex justify-between items-center bg-[#f7f7f3]/50">
             <h3 className="text-lg font-black text-[#2b251d] uppercase italic flex items-center gap-2"><Package size={18} /> Felhasznált Anyagok</h3>
           </div>
@@ -363,30 +421,128 @@ export default function ProjectDetailsPage({ params }: PageProps) {
           </div>
         </div>
 
-        {/* SZÁMLÁK */}
-        <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden">
-          <div className="p-8 border-b border-[#f7f7f3] flex justify-between items-center bg-[#f7f7f3]/50">
-            <h3 className="text-lg font-black text-[#2b251d] uppercase italic flex items-center gap-2"><FileText size={18} /> Kapcsolódó Számlák</h3>
-          </div>
-          <div className="max-h-[400px] overflow-y-auto p-4 space-y-2">
-            {invoices.length === 0 ? (
-              <div className="p-4 text-center text-[#c7c8ad] font-bold text-xs uppercase tracking-widest">Nincs csatolt számla.</div>
-            ) : (
-              invoices.map((inv) => (
-                <Link key={inv.id} href={`/dashboard/${inv.id}`} className="block">
-                  <div className="flex items-center justify-between p-4 rounded-2xl border border-[#f7f7f3] hover:border-[#989168] hover:bg-[#fffcf5] transition-all group">
-                    <div>
-                      <p className="font-bold text-[#2b251d] text-sm">{inv.supplier_name || 'Ismeretlen'}</p>
-                      <p className="text-[10px] text-[#b6b693] font-bold uppercase">{new Date(inv.created_at).toLocaleDateString()}</p>
+        {/* JOBB OSZLOP: SZÁMLÁK & MUNKANAPLÓ & ALVÁLLALKOZÓK */}
+        <div className="flex flex-col gap-10">
+          
+          {/* 1. SZÁMLÁK */}
+          <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden">
+            <div className="p-8 border-b border-[#f7f7f3] flex justify-between items-center bg-[#f7f7f3]/50">
+              <h3 className="text-lg font-black text-[#2b251d] uppercase italic flex items-center gap-2"><FileText size={18} /> Kapcsolódó Számlák</h3>
+            </div>
+            <div className="max-h-[200px] overflow-y-auto p-4 space-y-2">
+              {invoices.length === 0 ? (
+                <div className="p-4 text-center text-[#c7c8ad] font-bold text-xs uppercase tracking-widest">Nincs csatolt számla.</div>
+              ) : (
+                invoices.map((inv) => (
+                  <Link key={inv.id} href={`/dashboard/${inv.id}`} className="block">
+                    <div className="flex items-center justify-between p-4 rounded-2xl border border-[#f7f7f3] hover:border-[#989168] hover:bg-[#fffcf5] transition-all group">
+                      <div>
+                        <p className="font-bold text-[#2b251d] text-sm">{inv.supplier_name || 'Ismeretlen'}</p>
+                        <p className="text-[10px] text-[#b6b693] font-bold uppercase">{new Date(inv.created_at).toLocaleDateString()}</p>
+                      </div>
+                      <div className="p-2 bg-[#f7f7f3] rounded-full text-[#c7c8ad] group-hover:text-[#2b251d] transition-colors">
+                        <ArrowRight size={16} />
+                      </div>
                     </div>
-                    <div className="p-2 bg-[#f7f7f3] rounded-full text-[#c7c8ad] group-hover:text-[#2b251d] transition-colors">
-                      <ArrowRight size={16} />
-                    </div>
-                  </div>
-                </Link>
-              ))
-            )}
+                  </Link>
+                ))
+              )}
+            </div>
           </div>
+
+          {/* 2. MUNKANAPLÓ */}
+          <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden">
+            <div className="p-8 border-b border-[#f7f7f3] flex justify-between items-center bg-[#f7f7f3]/50">
+              <h3 className="text-lg font-black text-[#2b251d] uppercase italic flex items-center gap-2"><Clock size={18} /> Munkanapló</h3>
+            </div>
+            <div className="max-h-[200px] overflow-y-auto">
+              {timesheets.length === 0 ? (
+                <div className="p-8 text-center text-[#c7c8ad] font-bold text-xs uppercase tracking-widest">Nincs rögzített munkaidő.</div>
+              ) : (
+                <table className="w-full text-left">
+                  <thead className="bg-[#f7f7f3] text-[#b6b693] text-[9px] font-black uppercase tracking-widest sticky top-0">
+                    <tr>
+                      <th className="p-4 pl-8">Munkás</th>
+                      <th className="p-4 text-center">Dátum</th>
+                      <th className="p-4 text-center">Óra</th>
+                      <th className="p-4 pr-8 text-right">Költség</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f7f7f3]">
+                    {timesheets.map((ts, i) => (
+                      <tr key={i} className="hover:bg-[#fffcf5] transition-colors">
+                        <td className="p-4 pl-8 font-bold text-[#2b251d] text-sm flex items-center gap-2">
+                          <HardHat size={14} className="text-[#989168]" />
+                          {ts.workers?.name}
+                        </td>
+                        <td className="p-4 text-center text-xs font-bold text-[#857b5a]">{new Date(ts.date).toLocaleDateString()}</td>
+                        <td className="p-4 text-center text-xs font-bold text-[#2b251d]">{ts.hours}</td>
+                        <td className="p-4 pr-8 text-right font-black text-[#2b251d]">{Math.round(ts.calculated_cost).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          {/* 3. ALVÁLLALKOZÓK - ÚJ SZEKCIÓ */}
+          <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden">
+            <div className="p-8 border-b border-[#f7f7f3] flex justify-between items-center bg-[#f7f7f3]/50">
+              <h3 className="text-lg font-black text-[#2b251d] uppercase italic flex items-center gap-2"><Briefcase size={18} /> Alvállalkozói Szerződések</h3>
+              <button 
+                onClick={() => setIsJobModalOpen(true)}
+                className="bg-[#2b251d] hover:bg-[#4e4639] text-white px-3 py-2 rounded-xl flex items-center gap-2 transition-all text-[10px] font-black uppercase tracking-widest"
+              >
+                <Plus size={12} /> Új Megbízás
+              </button>
+            </div>
+            <div className="max-h-[300px] overflow-y-auto">
+              {subcontractorJobs.length === 0 ? (
+                <div className="p-8 text-center text-[#c7c8ad] font-bold text-xs uppercase tracking-widest">Nincs alvállalkozói megbízás.</div>
+              ) : (
+                <table className="w-full text-left">
+                  <thead className="bg-[#f7f7f3] text-[#b6b693] text-[9px] font-black uppercase tracking-widest sticky top-0">
+                    <tr>
+                      <th className="p-4 pl-8">Partner</th>
+                      <th className="p-4">Leírás</th>
+                      <th className="p-4 text-right">Fix Ár</th>
+                      <th className="p-4 text-right">Kifizetve</th>
+                      <th className="p-4 text-center">Akció</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f7f7f3]">
+                    {subcontractorJobs.map((job) => (
+                      <tr key={job.id} className="hover:bg-[#fffcf5] transition-colors">
+                        <td className="p-4 pl-8 font-bold text-[#2b251d] text-sm">
+                          {job.subcontractors?.name}
+                          <span className="block text-[9px] text-[#b6b693] uppercase">{job.subcontractors?.trade}</span>
+                        </td>
+                        <td className="p-4 text-xs text-[#5d5343] font-bold">{job.description}</td>
+                        <td className="p-4 text-right font-black text-[#2b251d]">{job.agreed_price.toLocaleString()}</td>
+                        <td className="p-4 text-right font-bold text-[#857b5a]">
+                          {job.paid.toLocaleString()}
+                          <div className="w-full h-1 bg-[#f7f7f3] rounded-full mt-1">
+                            <div className="h-full bg-[#989168] rounded-full" style={{ width: `${Math.min((job.paid/job.agreed_price)*100, 100)}%` }}></div>
+                          </div>
+                        </td>
+                        <td className="p-4 text-center">
+                          <button 
+                            onClick={() => { setNewPayment({...newPayment, job_id: job.id}); setIsPaymentModalOpen(true); }}
+                            className="p-2 bg-[#f7f7f3] hover:bg-[#2b251d] hover:text-white rounded-lg transition-colors text-[#c7c8ad]"
+                            title="Kifizetés rögzítése"
+                          >
+                            <FileSignature size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -464,7 +620,6 @@ export default function ProjectDetailsPage({ params }: PageProps) {
                         onChange={(e) => handleEditCategoryChange(idx, 'allocated_amount', e.target.value)}
                       />
                       
-                      {/* Törlés csak ha nincs költés */}
                       {cat.spent > 0 ? (
                         <div title="Már van rajta költés, nem törölhető" className="p-2 text-gray-300 cursor-not-allowed">
                           <Trash2 size={14} />
@@ -488,6 +643,88 @@ export default function ProjectDetailsPage({ params }: PageProps) {
                   <Save size={16} /> Változások Mentése
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW SUBCONTRACTOR JOB MODAL */}
+      {isJobModalOpen && (
+        <div className="fixed inset-0 bg-[#2b251d]/40 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-[2rem] w-full max-w-sm p-8 shadow-2xl animate-in zoom-in duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-black uppercase text-[#2b251d]">Új Megbízás</h2>
+              <button onClick={() => setIsJobModalOpen(false)} className="text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><X size={20} /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Partner</label>
+                <select 
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm appearance-none"
+                  value={newJob.subcontractor_id}
+                  onChange={e => setNewJob({...newJob, subcontractor_id: e.target.value})}
+                >
+                  <option value="">Válassz partnert...</option>
+                  {allSubcontractors.map(s => <option key={s.id} value={s.id}>{s.name} ({s.trade})</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Feladat leírása</label>
+                <input 
+                  placeholder="pl. Tetőszerkezet ácsmunkái"
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newJob.description}
+                  onChange={e => setNewJob({...newJob, description: e.target.value})} 
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Megállapodott ár (RON)</label>
+                <input 
+                  type="number"
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newJob.agreed_price}
+                  onChange={e => setNewJob({...newJob, agreed_price: e.target.value})} 
+                />
+              </div>
+              <button onClick={handleAddJob} className="w-full py-4 bg-[#2b251d] text-white font-black rounded-xl hover:bg-[#4e4639] transition-all uppercase tracking-widest text-xs mt-2 flex justify-center items-center gap-2">
+                <Check size={16} /> Mentés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW PAYMENT MODAL */}
+      {isPaymentModalOpen && (
+        <div className="fixed inset-0 bg-[#2b251d]/40 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-[2rem] w-full max-w-sm p-8 shadow-2xl animate-in zoom-in duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-black uppercase text-[#2b251d]">Kifizetés Rögzítése</h2>
+              <button onClick={() => setIsPaymentModalOpen(false)} className="text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><X size={20} /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Összeg (RON)</label>
+                <input 
+                  autoFocus
+                  type="number"
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newPayment.amount}
+                  onChange={e => setNewPayment({...newPayment, amount: e.target.value})} 
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Megjegyzés</label>
+                <input 
+                  placeholder="pl. Előleg"
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newPayment.note}
+                  onChange={e => setNewPayment({...newPayment, note: e.target.value})} 
+                />
+              </div>
+              <button onClick={handleAddPayment} className="w-full py-4 bg-[#2b251d] text-white font-black rounded-xl hover:bg-[#4e4639] transition-all uppercase tracking-widest text-xs mt-2 flex justify-center items-center gap-2">
+                <Check size={16} /> Rögzítés
+              </button>
             </div>
           </div>
         </div>
