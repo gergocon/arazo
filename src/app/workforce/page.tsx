@@ -138,7 +138,7 @@ export default function WorkforcePage() {
       return { valid: false, error: 'Erre a projektre már van rögzítve idő a mai napon. Kérlek, módosítsd a meglévő bejegyzést!' };
     }
 
-    // RULE 2: 12 ÓRÁS LIMIT
+    // RULE 2: 12 ÓRÁS LIMIT (Módosítva 24-ről 12-re a kérésednek megfelelően)
     const currentTotalHours = otherEntries.reduce((sum, e) => sum + e.hours, 0);
     if (currentTotalHours + hours > 12) {
       return { valid: false, error: `Napi limit túllépés! Már dolgozott ${currentTotalHours} órát, az új bejegyzéssel (${hours}ó) túllépné a 12 órát.` };

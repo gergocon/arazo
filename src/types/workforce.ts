@@ -26,6 +26,10 @@ export interface Timesheet {
   calculated_cost: number;
   created_at?: string;
   
+  // ÚJ MEZŐK a csoportosításoz
+  batch_id?: string;
+  group_name?: string;
+
   // Opcionális mezők JOIN lekérdezésekhez
   workers?: Worker;
   projects?: {
