@@ -8,6 +8,14 @@ export interface Worker {
   created_at?: string;
 }
 
+export interface WorkerGroup {
+  id: string;
+  name: string;
+  created_at?: string;
+  // A kapcsolódó tagok (frontend oldali join után)
+  members?: Worker[];
+}
+
 export interface Timesheet {
   id: string;
   worker_id: string;
