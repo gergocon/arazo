@@ -34,7 +34,6 @@ export interface Timesheet {
   };
 }
 
-// Segédtípus a csoportosított nézethez (pl. havi összesítő)
 export interface WorkerStats {
   worker_id: string;
   worker_name: string;
