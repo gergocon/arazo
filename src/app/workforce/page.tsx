@@ -3,10 +3,12 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
+import * as XLSX from 'xlsx';
 import { 
   Users, Clock, Plus, Loader2, X, Check, 
   Coins, HardHat, Group, UserPlus, Layers,
-  Pencil, Trash2, Eye, Calendar as CalendarIcon, Save, AlertTriangle
+  Pencil, Trash2, Eye, Calendar as CalendarIcon, Save, AlertTriangle,
+  FileSpreadsheet, CalendarRange, Filter
 } from 'lucide-react';
 import { Worker, Timesheet, WorkerGroup } from '@/types/workforce';
 
@@ -19,6 +21,12 @@ export default function WorkforcePage() {
   const [groups, setGroups] = useState<WorkerGroup[]>([]);
   const [timesheets, setTimesheets] = useState<Timesheet[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
+
+  // FILTER STATE (Date Range)
+  const [dateFilter, setDateFilter] = useState({
+    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0], // Hónap elseje
+    end: new Date().toISOString().split('T')[0] // Ma
+  });
 
   // MODAL STATES
   const [isWorkerModalOpen, setIsWorkerModalOpen] = useState(false);
@@ -64,7 +72,7 @@ export default function WorkforcePage() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [dateFilter]); // Újratöltés, ha változik a dátum szűrő
 
   // Batch Form inicializálása amikor megnyílik a modal
   useEffect(() => {
@@ -89,15 +97,14 @@ export default function WorkforcePage() {
   async function fetchData() {
     setLoading(true);
     try {
-      const [workersRes, timesheetsRes, projectsRes, groupsRes] = await Promise.all([
+      // 1. Alapadatok betöltése
+      const [workersRes, projectsRes, groupsRes] = await Promise.all([
         supabase.from('workers').select('*').order('name'),
-        supabase.from('timesheets').select('*, workers(name, hourly_rate), projects(name)').order('date', { ascending: false }).limit(100),
         supabase.from('projects').select('id, name').eq('status', 'active').order('name'),
         supabase.from('worker_groups').select('*, worker_group_members(worker_id)')
       ]);
 
       if (workersRes.data) setWorkers(workersRes.data);
-      if (timesheetsRes.data) setTimesheets(timesheetsRes.data);
       if (projectsRes.data) setProjects(projectsRes.data);
 
       if (groupsRes.data && workersRes.data) {
@@ -108,12 +115,84 @@ export default function WorkforcePage() {
         setGroups(fullGroups);
       }
 
+      // 2. Munkanapló betöltése a szűrő alapján
+      let query = supabase
+        .from('timesheets')
+        .select('*, workers(name, hourly_rate, role), projects(name)')
+        .order('date', { ascending: false });
+
+      if (dateFilter.start) query = query.gte('date', dateFilter.start);
+      if (dateFilter.end) query = query.lte('date', dateFilter.end);
+
+      const timesheetsRes = await query;
+      if (timesheetsRes.data) setTimesheets(timesheetsRes.data);
+
     } catch (error) {
       console.error('Hiba az adatok betöltésekor:', error);
     } finally {
       setLoading(false);
     }
   }
+
+  // --- EXCEL EXPORT ---
+  const handleExportExcel = () => {
+    if (timesheets.length === 0) return alert("Nincs exportálható adat a kiválasztott időszakban.");
+
+    // 1. Munkalap: Összesítő (Munkásonként)
+    const summaryData: Record<string, any> = {};
+    timesheets.forEach(t => {
+      const wName = t.workers?.name || 'Ismeretlen';
+      if (!summaryData[wName]) {
+        summaryData[wName] = {
+          'Munkás Neve': wName,
+          'Szerepkör': t.workers?.role || '-',
+          'Összes Óra': 0,
+          'Órabér (Aktuális)': t.workers?.hourly_rate || 0,
+          'Összes Költség (RON)': 0
+        };
+      }
+      summaryData[wName]['Összes Óra'] += t.hours;
+      summaryData[wName]['Összes Költség (RON)'] += t.calculated_cost;
+    });
+    const wsSummary = XLSX.utils.json_to_sheet(Object.values(summaryData));
+
+    // 2. Munkalap: Projekt Bontás
+    const projectData: Record<string, any> = {};
+    timesheets.forEach(t => {
+      const pName = t.projects?.name || 'Egyéb';
+      if (!projectData[pName]) {
+        projectData[pName] = {
+          'Projekt Neve': pName,
+          'Összes Óra': 0,
+          'Összes Költség (RON)': 0
+        };
+      }
+      projectData[pName]['Összes Óra'] += t.hours;
+      projectData[pName]['Összes Költség (RON)'] += t.calculated_cost;
+    });
+    const wsProjects = XLSX.utils.json_to_sheet(Object.values(projectData));
+
+    // 3. Munkalap: Részletes Napló
+    const detailedData = timesheets.map(t => ({
+      'Dátum': t.date,
+      'Munkás': t.workers?.name,
+      'Projekt': t.projects?.name,
+      'Leírás': t.description,
+      'Óra': t.hours,
+      'Költség (RON)': t.calculated_cost,
+      'Csoport': t.group_name || '-'
+    }));
+    const wsDetailed = XLSX.utils.json_to_sheet(detailedData);
+
+    // Munkafüzet összeállítása
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, wsSummary, "Összesítő");
+    XLSX.utils.book_append_sheet(wb, wsProjects, "Projekt Bontás");
+    XLSX.utils.book_append_sheet(wb, wsDetailed, "Részletes Napló");
+
+    // Letöltés indítása
+    XLSX.writeFile(wb, `Munkanaplo_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
 
   // --- VALIDÁCIÓS FÜGGVÉNY ---
   // Ellenőrzi a 12 órás limitet és a duplikációt
@@ -712,134 +791,183 @@ export default function WorkforcePage() {
 
           {/* TIMESHEET TAB */}
           {activeTab === 'timesheet' && (
-            <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-xl overflow-hidden">
-              <div className="p-8 border-b border-[#f7f7f3] flex flex-col md:flex-row justify-between items-center bg-[#f7f7f3]/30 gap-4">
-                <h3 className="text-lg font-black text-[#2b251d] uppercase italic">Munkaidő Rögzítés</h3>
-                <div className="flex gap-2">
+            <div className="space-y-6">
+              
+              {/* FILTER BAR - ÚJ */}
+              <div className="bg-white p-4 rounded-[2rem] border border-[#e7e8dd] shadow-sm flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2 px-3 text-[#b6b693] font-bold text-xs uppercase tracking-widest border-r border-[#e7e8dd] mr-2">
+                  <Filter size={14} /> Szűrők
+                </div>
+                
+                <div className="flex flex-col sm:flex-row gap-4 items-center">
+                  <div className="relative group">
+                    <span className="absolute -top-2 left-2 bg-white px-1 text-[9px] font-black text-[#b6b693] uppercase">Kezdő dátum</span>
+                    <div className="flex items-center bg-[#f7f7f3] rounded-xl px-3 py-2 border border-transparent focus-within:border-[#989168] transition-colors">
+                      <CalendarRange size={14} className="text-[#c7c8ad] mr-2" />
+                      <input 
+                        type="date"
+                        className="bg-transparent text-xs font-bold text-[#2b251d] outline-none"
+                        value={dateFilter.start}
+                        onChange={(e) => setDateFilter({...dateFilter, start: e.target.value})}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="relative group">
+                    <span className="absolute -top-2 left-2 bg-white px-1 text-[9px] font-black text-[#b6b693] uppercase">Záró dátum</span>
+                    <div className="flex items-center bg-[#f7f7f3] rounded-xl px-3 py-2 border border-transparent focus-within:border-[#989168] transition-colors">
+                      <CalendarRange size={14} className="text-[#c7c8ad] mr-2" />
+                      <input 
+                        type="date"
+                        className="bg-transparent text-xs font-bold text-[#2b251d] outline-none"
+                        value={dateFilter.end}
+                        onChange={(e) => setDateFilter({...dateFilter, end: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="ml-auto">
                   <button 
-                    onClick={() => openTimeModal()}
-                    className="bg-white border border-[#e7e8dd] hover:border-[#2b251d] text-[#2b251d] px-5 py-3 rounded-xl flex items-center gap-2 transition-all text-xs font-black uppercase tracking-widest"
+                    onClick={handleExportExcel}
+                    disabled={timesheets.length === 0}
+                    className="flex items-center gap-2 px-5 py-3 bg-[#059669] hover:bg-[#047857] text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg shadow-green-900/10 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Plus size={14} /> Egyéni
-                  </button>
-                  <button 
-                    onClick={() => setIsGroupLogModalOpen(true)}
-                    className="bg-[#2b251d] hover:bg-[#4e4639] text-white px-5 py-3 rounded-xl flex items-center gap-2 transition-all text-xs font-black uppercase tracking-widest shadow-lg shadow-[#2b251d]/20"
-                  >
-                    <Users size={14} /> Csoportos
+                    <FileSpreadsheet size={16} /> Excel Export
                   </button>
                 </div>
               </div>
 
-              {processedTimesheets.length === 0 ? (
-                <div className="p-20 text-center">
-                  <div className="bg-[#f7f7f3] w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-[#c7c8ad]">
-                    <Clock size={32} />
+              {/* TIMESHEET TABLE CARD */}
+              <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-xl overflow-hidden">
+                <div className="p-8 border-b border-[#f7f7f3] flex flex-col md:flex-row justify-between items-center bg-[#f7f7f3]/30 gap-4">
+                  <h3 className="text-lg font-black text-[#2b251d] uppercase italic">Munkaidő Rögzítés</h3>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => openTimeModal()}
+                      className="bg-white border border-[#e7e8dd] hover:border-[#2b251d] text-[#2b251d] px-5 py-3 rounded-xl flex items-center gap-2 transition-all text-xs font-black uppercase tracking-widest"
+                    >
+                      <Plus size={14} /> Egyéni
+                    </button>
+                    <button 
+                      onClick={() => setIsGroupLogModalOpen(true)}
+                      className="bg-[#2b251d] hover:bg-[#4e4639] text-white px-5 py-3 rounded-xl flex items-center gap-2 transition-all text-xs font-black uppercase tracking-widest shadow-lg shadow-[#2b251d]/20"
+                    >
+                      <Users size={14} /> Csoportos
+                    </button>
                   </div>
-                  <p className="text-[#b6b693] font-bold uppercase tracking-widest text-xs">Nincs rögzített munkaidő.</p>
                 </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead className="bg-[#f7f7f3] text-[#b6b693] text-[9px] font-black uppercase tracking-widest">
-                      <tr>
-                        <th className="p-6 pl-8">Dátum</th>
-                        <th className="p-6">Munkás / Brigád</th>
-                        <th className="p-6">Projekt</th>
-                        <th className="p-6">Leírás</th>
-                        <th className="p-6 text-center">Óra</th>
-                        <th className="p-6 text-right">Költség</th>
-                        <th className="p-6 pr-8 text-center">Akciók</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#f7f7f3]">
-                      {processedTimesheets.map((row, index) => {
-                        // HA EGYÉNI SOR
-                        if (row.type === 'single') {
-                          const ts = row.data as Timesheet;
-                          return (
-                            <tr key={ts.id} className="hover:bg-[#fffcf5] transition-colors group">
-                              <td className="p-6 pl-8 font-bold text-[#2b251d] text-sm whitespace-nowrap">
-                                {new Date(ts.date).toLocaleDateString()}
-                              </td>
-                              <td className="p-6 font-bold text-[#5d5343] text-sm">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-6 h-6 bg-[#f7f7f3] rounded-full flex items-center justify-center text-[10px] font-black text-[#989168]">
-                                    {ts.workers?.name.charAt(0)}
-                                  </div>
-                                  {ts.workers?.name}
-                                </div>
-                              </td>
-                              <td className="p-6 text-xs font-bold text-[#857b5a] bg-white">
-                                <span className="bg-[#f7f7f3] px-3 py-1 rounded-lg border border-[#e7e8dd]">
-                                  {ts.projects?.name}
-                                </span>
-                              </td>
-                              <td className="p-6 text-xs text-[#b6b693] italic max-w-xs truncate">{ts.description || '-'}</td>
-                              <td className="p-6 text-center font-black text-[#2b251d]">{ts.hours} óra</td>
-                              <td className="p-6 text-right font-black text-[#2b251d] text-base">
-                                {ts.calculated_cost.toLocaleString()} <span className="text-[10px] text-[#c7c8ad]">RON</span>
-                              </td>
-                              <td className="p-6 pr-8 text-center">
-                                <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <button onClick={() => openTimeModal(ts)} className="p-2 text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><Pencil size={14} /></button>
-                                  <button onClick={() => handleDeleteTimesheet(ts.id)} className="p-2 text-[#c7c8ad] hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        } 
-                        // HA CSOPORTOS SOR (BATCH)
-                        else {
-                          const items = row.data as Timesheet[];
-                          const first = items[0];
-                          const totalCost = items.reduce((sum, i) => sum + (i.calculated_cost || 0), 0);
-                          const distinctWorkers = items.length;
-                          const totalHours = items.reduce((sum, i) => sum + (i.hours || 0), 0);
 
-                          return (
-                            <tr 
-                              key={`batch-${first.batch_id}`} 
-                              className="bg-[#fcfbf9] hover:bg-[#fffcf5] transition-colors group cursor-pointer border-l-4 border-l-[#989168]"
-                              onClick={() => setSelectedBatch({ id: first.batch_id!, entries: items })}
-                            >
-                              <td className="p-6 pl-8 font-bold text-[#2b251d] text-sm whitespace-nowrap">
-                                {new Date(first.date).toLocaleDateString()}
-                              </td>
-                              <td className="p-6 font-bold text-[#2b251d] text-sm">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-6 h-6 bg-[#2b251d] rounded text-white flex items-center justify-center text-[10px] font-black">
-                                    <Layers size={12} />
+                {processedTimesheets.length === 0 ? (
+                  <div className="p-20 text-center">
+                    <div className="bg-[#f7f7f3] w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-[#c7c8ad]">
+                      <Clock size={32} />
+                    </div>
+                    <p className="text-[#b6b693] font-bold uppercase tracking-widest text-xs">Nincs rögzített munkaidő a kiválasztott időszakban.</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead className="bg-[#f7f7f3] text-[#b6b693] text-[9px] font-black uppercase tracking-widest">
+                        <tr>
+                          <th className="p-6 pl-8">Dátum</th>
+                          <th className="p-6">Munkás / Brigád</th>
+                          <th className="p-6">Projekt</th>
+                          <th className="p-6">Leírás</th>
+                          <th className="p-6 text-center">Óra</th>
+                          <th className="p-6 text-right">Költség</th>
+                          <th className="p-6 pr-8 text-center">Akciók</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#f7f7f3]">
+                        {processedTimesheets.map((row, index) => {
+                          // HA EGYÉNI SOR
+                          if (row.type === 'single') {
+                            const ts = row.data as Timesheet;
+                            return (
+                              <tr key={ts.id} className="hover:bg-[#fffcf5] transition-colors group">
+                                <td className="p-6 pl-8 font-bold text-[#2b251d] text-sm whitespace-nowrap">
+                                  {new Date(ts.date).toLocaleDateString()}
+                                </td>
+                                <td className="p-6 font-bold text-[#5d5343] text-sm">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 bg-[#f7f7f3] rounded-full flex items-center justify-center text-[10px] font-black text-[#989168]">
+                                      {ts.workers?.name.charAt(0)}
+                                    </div>
+                                    {ts.workers?.name}
                                   </div>
-                                  <span>{first.group_name || 'Névtelen Brigád'}</span>
-                                  <span className="text-[10px] font-normal text-[#989168] ml-1">({distinctWorkers} fő)</span>
-                                </div>
-                              </td>
-                              <td className="p-6 text-xs font-bold text-[#857b5a]">
-                                <span className="bg-white px-3 py-1 rounded-lg border border-[#e7e8dd]">
-                                  {first.projects?.name}
-                                </span>
-                              </td>
-                              <td className="p-6 text-xs text-[#b6b693] italic max-w-xs truncate">{first.description || 'Csoportos rögzítés'}</td>
-                              <td className="p-6 text-center font-black text-[#2b251d]">{totalHours} óra <span className="text-[9px] font-normal text-[#c7c8ad] block">összesen</span></td>
-                              <td className="p-6 text-right font-black text-[#2b251d] text-base">
-                                {totalCost.toLocaleString()} <span className="text-[10px] text-[#c7c8ad]">RON</span>
-                              </td>
-                              <td className="p-6 pr-8 text-center">
-                                <div className="flex items-center justify-center gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
-                                  <div className="flex items-center gap-1 text-[10px] font-bold text-[#989168] uppercase tracking-widest">
-                                    <Pencil size={14} /> Szerkesztés
+                                </td>
+                                <td className="p-6 text-xs font-bold text-[#857b5a] bg-white">
+                                  <span className="bg-[#f7f7f3] px-3 py-1 rounded-lg border border-[#e7e8dd]">
+                                    {ts.projects?.name}
+                                  </span>
+                                </td>
+                                <td className="p-6 text-xs text-[#b6b693] italic max-w-xs truncate">{ts.description || '-'}</td>
+                                <td className="p-6 text-center font-black text-[#2b251d]">{ts.hours} óra</td>
+                                <td className="p-6 text-right font-black text-[#2b251d] text-base">
+                                  {ts.calculated_cost.toLocaleString()} <span className="text-[10px] text-[#c7c8ad]">RON</span>
+                                </td>
+                                <td className="p-6 pr-8 text-center">
+                                  <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={() => openTimeModal(ts)} className="p-2 text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><Pencil size={14} /></button>
+                                    <button onClick={() => handleDeleteTimesheet(ts.id)} className="p-2 text-[#c7c8ad] hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
                                   </div>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        }
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                                </td>
+                              </tr>
+                            );
+                          } 
+                          // HA CSOPORTOS SOR (BATCH)
+                          else {
+                            const items = row.data as Timesheet[];
+                            const first = items[0];
+                            const totalCost = items.reduce((sum, i) => sum + (i.calculated_cost || 0), 0);
+                            const distinctWorkers = items.length;
+                            const totalHours = items.reduce((sum, i) => sum + (i.hours || 0), 0);
+
+                            return (
+                              <tr 
+                                key={`batch-${first.batch_id}`} 
+                                className="bg-[#fcfbf9] hover:bg-[#fffcf5] transition-colors group cursor-pointer border-l-4 border-l-[#989168]"
+                                onClick={() => setSelectedBatch({ id: first.batch_id!, entries: items })}
+                              >
+                                <td className="p-6 pl-8 font-bold text-[#2b251d] text-sm whitespace-nowrap">
+                                  {new Date(first.date).toLocaleDateString()}
+                                </td>
+                                <td className="p-6 font-bold text-[#2b251d] text-sm">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 bg-[#2b251d] rounded text-white flex items-center justify-center text-[10px] font-black">
+                                      <Layers size={12} />
+                                    </div>
+                                    <span>{first.group_name || 'Névtelen Brigád'}</span>
+                                    <span className="text-[10px] font-normal text-[#989168] ml-1">({distinctWorkers} fő)</span>
+                                  </div>
+                                </td>
+                                <td className="p-6 text-xs font-bold text-[#857b5a]">
+                                  <span className="bg-white px-3 py-1 rounded-lg border border-[#e7e8dd]">
+                                    {first.projects?.name}
+                                  </span>
+                                </td>
+                                <td className="p-6 text-xs text-[#b6b693] italic max-w-xs truncate">{first.description || 'Csoportos rögzítés'}</td>
+                                <td className="p-6 text-center font-black text-[#2b251d]">{totalHours} óra <span className="text-[9px] font-normal text-[#c7c8ad] block">összesen</span></td>
+                                <td className="p-6 text-right font-black text-[#2b251d] text-base">
+                                  {totalCost.toLocaleString()} <span className="text-[10px] text-[#c7c8ad]">RON</span>
+                                </td>
+                                <td className="p-6 pr-8 text-center">
+                                  <div className="flex items-center justify-center gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
+                                    <div className="flex items-center gap-1 text-[10px] font-bold text-[#989168] uppercase tracking-widest">
+                                      <Pencil size={14} /> Szerkesztés
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          }
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>
