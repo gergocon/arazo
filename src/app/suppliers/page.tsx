@@ -193,7 +193,13 @@ export default function SuppliersPage() {
   );
 }
 
-function SupplierCard({ supplier, rank, onEdit }: { supplier: any, rank: number, onEdit: (name: string) => void }) {
+interface SupplierCardProps {
+  supplier: any;
+  rank: number;
+  onEdit: (name: string) => void;
+}
+
+function SupplierCard({ supplier, rank, onEdit }: SupplierCardProps) {
   return (
     <div className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-[#2b251d]/5 border border-[#e7e8dd] hover:border-[#989168] transition-all group flex flex-col md:flex-row items-center gap-8 relative">
       {/* RANG ÉS IKON */}

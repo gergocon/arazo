@@ -13,7 +13,8 @@ import {
   BarChart3,
   FolderKanban,
   Users,
-  Briefcase // ÚJ IKON
+  Briefcase,
+  ScrollText // ÚJ IKON
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -22,8 +23,9 @@ export default function Sidebar() {
   const menuItems = [
     { name: 'Vezérlőpult', icon: LayoutDashboard, href: '/' },
     { name: 'Projektek', icon: FolderKanban, href: '/projects' },
+    { name: 'Árajánlatok', icon: ScrollText, href: '/quotes' }, // ÚJ MENÜPONT
     { name: 'Munkaerő', icon: Users, href: '/workforce' },
-    { name: 'Alvállalkozók', icon: Briefcase, href: '/subcontractors' }, // ÚJ MENÜPONT
+    { name: 'Alvállalkozók', icon: Briefcase, href: '/subcontractors' },
     { name: 'Számlák', icon: FileText, href: '/invoices' },
     { name: 'Anyagkatalógus', icon: Database, href: '/catalog' },
     { name: 'Elemzések', icon: BarChart3, href: '/analysis' },

@@ -38,57 +38,77 @@ export default function ProjectsPage() {
   async function fetchProjects() {
     setLoading(true);
     try {
-      // Projektek lekérése
+      // 1. Projektek lekérése
       const { data: projData, error } = await supabase
         .from('projects')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
+      
+      if (!projData || projData.length === 0) {
+        setProjects([]);
+        return;
+      }
 
-      // Költségek kiszámolása projektenként (Anyag + Munkadíj + Alvállalkozók)
-      const projectsWithSpent = await Promise.all(projData.map(async (p) => {
-        // 1. Anyagköltség (Számlákból)
-        const { data: invoices } = await supabase
-          .from('invoices')
-          .select('id, invoice_items(quantity, unit_price)')
-          .eq('project_id', p.id);
+      // 2. TELJESÍTMÉNY OPTIMALIZÁLÁS (BULK FETCH)
+      // Ahelyett, hogy cikluson belül kérdeznénk le, egyszerre kérünk le mindent,
+      // majd a kliensen párosítjuk. Ez 4 query-re csökkenti az N*4 query-t.
+      
+      // A) Összes számla tétel (projekthez kötve a számlán keresztül)
+      // Mivel az invoice_items nem tudja közvetlenül a projekt ID-t, először a számlákat kell lekérni
+      // JAVÍTVA: Árfolyam és státusz lekérése
+      const { data: allInvoices } = await supabase
+        .from('invoices')
+        .select('id, project_id, exchange_rate, invoice_items(quantity, unit_price, status)')
+        .not('project_id', 'is', null);
 
+      // B) Összes munkaidő
+      const { data: allTimesheets } = await supabase
+        .from('timesheets')
+        .select('project_id, calculated_cost');
+
+      // C) Összes alvállalkozói kifizetés
+      const { data: allJobs } = await supabase
+        .from('subcontractor_jobs')
+        .select('project_id, subcontractor_payments(amount)');
+
+      // D) Összes közvetlen kiadás (ÚJ)
+      const { data: allExpenses } = await supabase
+        .from('project_expenses')
+        .select('project_id, amount');
+
+      // 3. ADATOK ÖSSZEFÉSÜLÉSE MEMÓRIÁBAN
+      const projectsWithSpent = projData.map(p => {
+        // Anyagköltség (Számlákból) - JAVÍTVA: Csak elfogadott tételek + Árfolyam
         let materialSpent = 0;
-        invoices?.forEach((inv: any) => {
+        const projectInvoices = allInvoices?.filter((inv: any) => inv.project_id === p.id);
+        projectInvoices?.forEach((inv: any) => {
+          const rate = inv.exchange_rate || 1;
           inv.invoice_items?.forEach((item: any) => {
-            materialSpent += (item.quantity || 0) * (item.unit_price || 0);
+            if (item.status === 'confirmed') { // Csak elfogadott tételeket számolunk
+              materialSpent += (item.quantity || 0) * (item.unit_price || 0) * rate;
+            }
           });
         });
 
-        // 2. Munkadíj (Timesheets-ből)
-        const { data: timesheets } = await supabase
-          .from('timesheets')
-          .select('calculated_cost')
-          .eq('project_id', p.id);
-        
-        const laborSpent = timesheets?.reduce((sum, t) => sum + (t.calculated_cost || 0), 0) || 0;
+        // Munkadíj
+        const projectTimesheets = allTimesheets?.filter((t: any) => t.project_id === p.id);
+        const laborSpent = projectTimesheets?.reduce((sum: number, t: any) => sum + (t.calculated_cost || 0), 0) || 0;
 
-        // 3. Alvállalkozók (Kifizetések) - ÚJ
-        // Először lekérjük a projekthez tartozó jobokat
-        const { data: jobs } = await supabase
-          .from('subcontractor_jobs')
-          .select('id')
-          .eq('project_id', p.id);
-        
+        // Alvállalkozók
+        const projectJobs = allJobs?.filter((j: any) => j.project_id === p.id);
         let subSpent = 0;
-        if (jobs && jobs.length > 0) {
-          const jobIds = jobs.map(j => j.id);
-          const { data: payments } = await supabase
-            .from('subcontractor_payments')
-            .select('amount')
-            .in('job_id', jobIds);
-          
-          subSpent = payments?.reduce((sum, pay) => sum + (pay.amount || 0), 0) || 0;
-        }
+        projectJobs?.forEach((job: any) => {
+          subSpent += job.subcontractor_payments?.reduce((sum: number, pay: any) => sum + (pay.amount || 0), 0) || 0;
+        });
 
-        return { ...p, spent: materialSpent + laborSpent + subSpent };
-      }));
+        // Közvetlen Kiadások (ÚJ)
+        const projectExpenses = allExpenses?.filter((exp: any) => exp.project_id === p.id);
+        const directExpensesSpent = projectExpenses?.reduce((sum: number, exp: any) => sum + (Number(exp.amount) || 0), 0) || 0;
+
+        return { ...p, spent: materialSpent + laborSpent + subSpent + directExpensesSpent };
+      });
 
       setProjects(projectsWithSpent);
     } catch (err) {

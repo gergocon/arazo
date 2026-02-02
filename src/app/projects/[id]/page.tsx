@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { 
   ArrowLeft, Calendar, MapPin, Wallet, 
   TrendingUp, FileText, Package, Check, Loader2, ArrowRight, PieChart, 
-  Pencil, X, Plus, Trash2, Save, Clock, HardHat, Briefcase, FileSignature
+  Pencil, X, Plus, Trash2, Save, Clock, HardHat, Briefcase, FileSignature, Receipt
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -25,9 +25,10 @@ export default function ProjectDetailsPage({ params }: PageProps) {
   const [categories, setCategories] = useState<any[]>([]);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [timesheets, setTimesheets] = useState<any[]>([]); 
-  // ÚJ: Alvállalkozói adatok
   const [subcontractorJobs, setSubcontractorJobs] = useState<any[]>([]);
   const [allSubcontractors, setAllSubcontractors] = useState<any[]>([]);
+  // ÚJ: Közvetlen kiadások
+  const [directExpenses, setDirectExpenses] = useState<any[]>([]);
 
   const [spent, setSpent] = useState(0);
   const [materials, setMaterials] = useState<any[]>([]);
@@ -48,6 +49,15 @@ export default function ProjectDetailsPage({ params }: PageProps) {
   const [newJob, setNewJob] = useState({ subcontractor_id: '', description: '', agreed_price: '' });
   const [newPayment, setNewPayment] = useState({ job_id: '', amount: '', note: '' });
 
+  // DIRECT EXPENSE MODAL
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [newExpense, setNewExpense] = useState({ 
+    category_id: '', 
+    description: '', 
+    amount: '', 
+    date: new Date().toISOString().split('T')[0] 
+  });
+
   useEffect(() => {
     fetchProjectDetails();
   }, [projectId]);
@@ -63,6 +73,7 @@ export default function ProjectDetailsPage({ params }: PageProps) {
       const { data: cats } = await supabase.from('project_categories').select('*').eq('project_id', projectId).order('created_at');
       
       // 3. Számlák és tételek lekérése
+      // JAVÍTVA: status mező lekérése a tételeknél
       const { data: invs } = await supabase
         .from('invoices')
         .select(`
@@ -73,7 +84,8 @@ export default function ProjectDetailsPage({ params }: PageProps) {
             raw_name,
             raw_unit,
             confirmed_material_id,
-            project_category_id
+            project_category_id,
+            status
           )
         `)
         .eq('project_id', projectId)
@@ -90,7 +102,7 @@ export default function ProjectDetailsPage({ params }: PageProps) {
       
       setTimesheets(ts || []);
 
-      // 5. Alvállalkozók lekérése (Jobs + Payments)
+      // 5. Alvállalkozók lekérése
       const { data: jobs } = await supabase
         .from('subcontractor_jobs')
         .select(`
@@ -108,19 +120,32 @@ export default function ProjectDetailsPage({ params }: PageProps) {
       
       setSubcontractorJobs(processedJobs);
 
-      // 6. Lista az összes alvállalkozóról (Dropdownhoz)
+      // 6. KÖZVETLEN KIADÁSOK LEKÉRÉSE (ÚJ)
+      const { data: expenses } = await supabase
+        .from('project_expenses')
+        .select('*, project_categories(name)')
+        .eq('project_id', projectId)
+        .order('date', { ascending: false });
+      
+      setDirectExpenses(expenses || []);
+
+      // 7. Lista az összes alvállalkozóról (Dropdownhoz)
       const { data: allSubs } = await supabase.from('subcontractors').select('id, name, trade').eq('status', 'active');
       setAllSubcontractors(allSubs || []);
 
-      // 7. ÖSSZESÍTETT KÖLTSÉGEK SZÁMÍTÁSA
+      // 8. ÖSSZESÍTETT KÖLTSÉGEK SZÁMÍTÁSA
       let totalSpent = 0;
       const matList: any[] = [];
       const categorySpent: {[key: string]: number} = {};
 
-      // A) ANYAGKÖLTSÉGEK
+      // A) ANYAGKÖLTSÉGEK (JAVÍTVA: Status szűrés + Árfolyam)
       invs?.forEach((inv: any) => {
+        const rate = inv.exchange_rate || 1;
         inv.invoice_items?.forEach((item: any) => {
-          const itemCost = (item.quantity || 0) * (item.unit_price || 0);
+          // CSAK ELFOGADOTT TÉTELEK
+          if (item.status !== 'confirmed') return;
+
+          const itemCost = (item.quantity || 0) * (item.unit_price || 0) * rate;
           totalSpent += itemCost;
           
           if (item.project_category_id) {
@@ -157,11 +182,19 @@ export default function ProjectDetailsPage({ params }: PageProps) {
       });
       totalSpent += totalSubPaid;
 
+      // D) KÖZVETLEN KIADÁSOK (ÚJ)
+      expenses?.forEach((exp: any) => {
+        const cost = Number(exp.amount) || 0;
+        totalSpent += cost;
+        if (exp.project_category_id) {
+          categorySpent[exp.project_category_id] = (categorySpent[exp.project_category_id] || 0) + cost;
+        }
+      });
+
       // Munkadíj és Alvállalkozó költség hozzáadása a kategóriákhoz (név alapján)
       const laborCat = cats?.find(c => c.name.toLowerCase().includes('munka') || c.name.toLowerCase().includes('labor'));
       if (laborCat) categorySpent[laborCat.id] = (categorySpent[laborCat.id] || 0) + totalLaborCost;
 
-      // Keresünk "Alvállalkozó" vagy hasonló kategóriát, ha nincs, nem rendeljük hozzá (vagy létrehozhatnánk)
       const subCat = cats?.find(c => c.name.toLowerCase().includes('alváll') || c.name.toLowerCase().includes('külső'));
       if (subCat) categorySpent[subCat.id] = (categorySpent[subCat.id] || 0) + totalSubPaid;
 
@@ -232,17 +265,14 @@ export default function ProjectDetailsPage({ params }: PageProps) {
   };
 
   // --- SUBCONTRACTOR FUNCTIONS ---
-  
   const handleAddJob = async () => {
     if (!newJob.subcontractor_id || !newJob.description || !newJob.agreed_price) return alert("Minden mező kötelező!");
-    
     const { error } = await supabase.from('subcontractor_jobs').insert([{
       project_id: projectId,
       subcontractor_id: newJob.subcontractor_id,
       description: newJob.description,
       agreed_price: parseFloat(newJob.agreed_price)
     }]);
-
     if (error) alert("Hiba: " + error.message);
     else {
       setIsJobModalOpen(false);
@@ -253,19 +283,49 @@ export default function ProjectDetailsPage({ params }: PageProps) {
 
   const handleAddPayment = async () => {
     if (!newPayment.amount) return alert("Összeg kötelező!");
-    
     const { error } = await supabase.from('subcontractor_payments').insert([{
       job_id: newPayment.job_id,
       amount: parseFloat(newPayment.amount),
       note: newPayment.note
     }]);
-
     if (error) alert("Hiba: " + error.message);
     else {
       setIsPaymentModalOpen(false);
       setNewPayment({ job_id: '', amount: '', note: '' });
       fetchProjectDetails();
     }
+  };
+
+  // --- DIRECT EXPENSE FUNCTIONS (ÚJ) ---
+  const handleAddExpense = async () => {
+    if (!newExpense.category_id || !newExpense.amount || !newExpense.description) return alert("Minden mező kötelező!");
+    
+    const { error } = await supabase.from('project_expenses').insert([{
+      project_id: projectId,
+      project_category_id: newExpense.category_id,
+      description: newExpense.description,
+      amount: parseFloat(newExpense.amount),
+      date: newExpense.date
+    }]);
+
+    if (error) alert("Hiba: " + error.message);
+    else {
+      setIsExpenseModalOpen(false);
+      setNewExpense({ category_id: '', description: '', amount: '', date: new Date().toISOString().split('T')[0] });
+      fetchProjectDetails();
+    }
+  };
+
+  const openExpenseModal = (categoryId: string) => {
+    setNewExpense(prev => ({ ...prev, category_id: categoryId }));
+    setIsExpenseModalOpen(true);
+  };
+
+  const handleDeleteExpense = async (id: string) => {
+    if(!confirm('Biztosan törlöd ezt a kiadást?')) return;
+    const { error } = await supabase.from('project_expenses').delete().eq('id', id);
+    if(error) alert(error.message);
+    else fetchProjectDetails();
   };
 
   if (loading) return <div className="flex justify-center py-40"><Loader2 className="animate-spin text-[#989168]" size={32} /></div>;
@@ -339,8 +399,8 @@ export default function ProjectDetailsPage({ params }: PageProps) {
               <p className="text-2xl font-black">{invoices.length} <span className="text-sm opacity-50">db</span></p>
             </div>
             <div>
-              <p className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-1">Alvállalkozók</p>
-              <p className="text-2xl font-black">{subcontractorJobs.length} <span className="text-sm opacity-50">db</span></p>
+              <p className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-1">Kiadások</p>
+              <p className="text-2xl font-black">{directExpenses.length} <span className="text-sm opacity-50">db</span></p>
             </div>
           </div>
         </div>
@@ -356,8 +416,18 @@ export default function ProjectDetailsPage({ params }: PageProps) {
             const catProgress = cat.allocated_amount > 0 ? (cat.spent / cat.allocated_amount) * 100 : 0;
             const isOver = catProgress > 100;
             return (
-              <div key={cat.id} className="bg-white p-6 rounded-[2rem] border border-[#e7e8dd] shadow-sm">
-                <div className="flex justify-between items-start mb-4">
+              <div key={cat.id} className="bg-white p-6 rounded-[2rem] border border-[#e7e8dd] shadow-sm group relative">
+                
+                {/* ADD EXPENSE BUTTON - MODIFIED: ALWAYS VISIBLE */}
+                <button 
+                  onClick={() => openExpenseModal(cat.id)}
+                  className="absolute top-6 right-6 p-2 bg-[#f7f7f3] rounded-full text-[#c7c8ad] hover:bg-[#2b251d] hover:text-white transition-all opacity-100"
+                  title="Kiadás hozzáadása ehhez a kategóriához"
+                >
+                  <Plus size={14} />
+                </button>
+
+                <div className="flex justify-between items-start mb-4 pr-10">
                   <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.color || '#989168' }}></div>
                     <span className="font-bold text-[#2b251d] text-sm">{cat.name}</span>
@@ -421,7 +491,7 @@ export default function ProjectDetailsPage({ params }: PageProps) {
           </div>
         </div>
 
-        {/* JOBB OSZLOP: SZÁMLÁK & MUNKANAPLÓ & ALVÁLLALKOZÓK */}
+        {/* JOBB OSZLOP: LISTÁK */}
         <div className="flex flex-col gap-10">
           
           {/* 1. SZÁMLÁK */}
@@ -486,7 +556,7 @@ export default function ProjectDetailsPage({ params }: PageProps) {
             </div>
           </div>
 
-          {/* 3. ALVÁLLALKOZÓK - ÚJ SZEKCIÓ */}
+          {/* 3. ALVÁLLALKOZÓK */}
           <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden">
             <div className="p-8 border-b border-[#f7f7f3] flex justify-between items-center bg-[#f7f7f3]/50">
               <h3 className="text-lg font-black text-[#2b251d] uppercase italic flex items-center gap-2"><Briefcase size={18} /> Alvállalkozói Szerződések</h3>
@@ -533,6 +603,48 @@ export default function ProjectDetailsPage({ params }: PageProps) {
                             title="Kifizetés rögzítése"
                           >
                             <FileSignature size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          {/* 4. KÖZVETLEN KIADÁSOK (ÚJ SZEKCIÓ) */}
+          <div className="bg-white rounded-[2.5rem] border border-[#e7e8dd] shadow-sm overflow-hidden">
+            <div className="p-8 border-b border-[#f7f7f3] flex justify-between items-center bg-[#f7f7f3]/50">
+              <h3 className="text-lg font-black text-[#2b251d] uppercase italic flex items-center gap-2"><Receipt size={18} /> Egyéb Közvetlen Kiadások</h3>
+            </div>
+            <div className="max-h-[300px] overflow-y-auto">
+              {directExpenses.length === 0 ? (
+                <div className="p-8 text-center text-[#c7c8ad] font-bold text-xs uppercase tracking-widest">Nincs rögzített egyéb kiadás.</div>
+              ) : (
+                <table className="w-full text-left">
+                  <thead className="bg-[#f7f7f3] text-[#b6b693] text-[9px] font-black uppercase tracking-widest sticky top-0">
+                    <tr>
+                      <th className="p-4 pl-8">Dátum</th>
+                      <th className="p-4">Leírás</th>
+                      <th className="p-4">Kategória</th>
+                      <th className="p-4 text-right">Összeg</th>
+                      <th className="p-4 text-center">Törlés</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f7f7f3]">
+                    {directExpenses.map((exp) => (
+                      <tr key={exp.id} className="hover:bg-[#fffcf5] transition-colors group">
+                        <td className="p-4 pl-8 font-bold text-[#b6b693] text-xs">{new Date(exp.date).toLocaleDateString()}</td>
+                        <td className="p-4 text-xs text-[#2b251d] font-bold">{exp.description}</td>
+                        <td className="p-4 text-[10px] uppercase font-bold text-[#857b5a]">{exp.project_categories?.name}</td>
+                        <td className="p-4 text-right font-black text-[#2b251d]">{Number(exp.amount).toLocaleString()}</td>
+                        <td className="p-4 text-center">
+                          <button 
+                            onClick={() => handleDeleteExpense(exp.id)}
+                            className="p-2 text-[#c7c8ad] hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                          >
+                            <Trash2 size={14} />
                           </button>
                         </td>
                       </tr>
@@ -723,6 +835,61 @@ export default function ProjectDetailsPage({ params }: PageProps) {
                 />
               </div>
               <button onClick={handleAddPayment} className="w-full py-4 bg-[#2b251d] text-white font-black rounded-xl hover:bg-[#4e4639] transition-all uppercase tracking-widest text-xs mt-2 flex justify-center items-center gap-2">
+                <Check size={16} /> Rögzítés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW DIRECT EXPENSE MODAL (ÚJ) */}
+      {isExpenseModalOpen && (
+        <div className="fixed inset-0 bg-[#2b251d]/40 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-[2rem] w-full max-w-sm p-8 shadow-2xl animate-in zoom-in duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-black uppercase text-[#2b251d]">Közvetlen Kiadás</h2>
+              <button onClick={() => setIsExpenseModalOpen(false)} className="text-[#c7c8ad] hover:text-[#2b251d] transition-colors"><X size={20} /></button>
+            </div>
+            <div className="space-y-4">
+              <div className="bg-[#f7f7f3] p-3 rounded-xl border border-[#e7e8dd]">
+                <span className="text-[9px] font-black text-[#b6b693] uppercase tracking-widest block mb-1">Kategória</span>
+                <span className="text-sm font-bold text-[#2b251d]">
+                  {categories.find(c => c.id === newExpense.category_id)?.name || 'Ismeretlen'}
+                </span>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Leírás</label>
+                <input 
+                  autoFocus
+                  placeholder="pl. Darubérlés, Fuvardíj..."
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newExpense.description}
+                  onChange={e => setNewExpense({...newExpense, description: e.target.value})} 
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Összeg (RON)</label>
+                <input 
+                  type="number"
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newExpense.amount}
+                  onChange={e => setNewExpense({...newExpense, amount: e.target.value})} 
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-[#989168] uppercase tracking-widest mb-2 block ml-2">Dátum</label>
+                <input 
+                  type="date"
+                  className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 
+                  value={newExpense.date}
+                  onChange={e => setNewExpense({...newExpense, date: e.target.value})} 
+                />
+              </div>
+
+              <button onClick={handleAddExpense} className="w-full py-4 bg-[#2b251d] text-white font-black rounded-xl hover:bg-[#4e4639] transition-all uppercase tracking-widest text-xs mt-2 flex justify-center items-center gap-2">
                 <Check size={16} /> Rögzítés
               </button>
             </div>

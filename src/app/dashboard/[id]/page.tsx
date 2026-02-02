@@ -1,3 +1,4 @@
+
 'use client';
 
 import { use, useEffect, useState } from 'react';
@@ -34,11 +35,9 @@ export default function InvoiceMappingPage({ params }: PageProps) {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeItemForNewMaterial, setActiveItemForNewMaterial] = useState<string | null>(null);
-  // ÚJ: brand mező a state-ben
   const [newMaterial, setNewMaterial] = useState({ name: '', unit: 'db', brand: '' });
 
   useEffect(() => { if (invoiceId) fetchData(); }, [invoiceId]);
-  useEffect(() => { if (currency !== 'RON') fetchExchangeRate(); else setExchangeRate(1); }, [currency]);
   
   // Ha változik a projekt, töltsük be a kategóriáit
   useEffect(() => {
@@ -54,9 +53,14 @@ export default function InvoiceMappingPage({ params }: PageProps) {
     setProjectCategories(data || []);
   }
 
-  async function fetchExchangeRate() {
+  // Ez most már csak akkor hívódik meg, ha explicit módon kérjük (pl. gombnyomás)
+  async function fetchExchangeRate(targetCurrency: string) {
+    if (targetCurrency === 'RON') {
+      setExchangeRate(1);
+      return;
+    }
     try {
-      const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${currency}`);
+      const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${targetCurrency}`);
       const data = await res.json();
       setExchangeRate(data.rates['RON']);
     } catch (e) { console.error(e); }
@@ -75,7 +79,20 @@ export default function InvoiceMappingPage({ params }: PageProps) {
       setInvoice(invData);
       setSupplierName(invData?.supplier_name || '');
       setSelectedProjectId(invData?.project_id || ''); // Projekt betöltése ha van
-      if (invData?.currency) setCurrency(invData.currency); // Pénznem betöltése
+      
+      // Pénznem és Árfolyam logika
+      if (invData?.currency) {
+        setCurrency(invData.currency);
+        
+        // Ha van mentett árfolyam, azt használjuk
+        if (invData.exchange_rate && invData.exchange_rate > 0) {
+          setExchangeRate(invData.exchange_rate);
+        } 
+        // Ha nincs mentett árfolyam, de a pénznem nem RON, lekérjük a mostanit
+        else if (invData.currency !== 'RON') {
+          fetchExchangeRate(invData.currency);
+        }
+      }
 
       // Ha van már projekt, töltsük be a kategóriákat is
       if (invData?.project_id) {
@@ -139,17 +156,19 @@ export default function InvoiceMappingPage({ params }: PageProps) {
   const handleSaveHeader = async () => {
     setSaveStatus('saving');
     
+    // Most már az aktuális árfolyamot is elmentjük, így "fixálódik"
     const { error } = await supabase.from('invoices')
       .update({ 
         supplier_name: supplierName,
         project_id: selectedProjectId || null,
-        currency: currency 
+        currency: currency,
+        exchange_rate: exchangeRate 
       })
       .eq('id', invoiceId);
 
     if (error) {
       console.error('Mentési hiba:', error);
-      alert('Nem sikerült menteni. Ellenőrizd, hogy lefuttattad-e az SQL parancsokat a Supabase-ben!');
+      alert('Nem sikerült menteni.');
       setSaveStatus('idle');
     } else {
       setSaveStatus('saved');
@@ -159,7 +178,6 @@ export default function InvoiceMappingPage({ params }: PageProps) {
 
   const handleSaveNewMaterial = async () => {
     if (!newMaterial.name) return;
-    // ÚJ: Márka mentése is
     const { data, error } = await supabase.from('materials').insert([newMaterial]).select();
     if (error) return alert("Hiba: " + error.message);
 
@@ -181,6 +199,7 @@ export default function InvoiceMappingPage({ params }: PageProps) {
     
     const categoryId = item.tempCategoryId || item.project_category_id;
     
+    // Itt használjuk a fixált árfolyamot!
     const priceInRon = item.unit_price * exchangeRate;
     
     // 1. Tétel frissítése
@@ -193,7 +212,7 @@ export default function InvoiceMappingPage({ params }: PageProps) {
       .eq('id', item.id);
 
     if (!error) {
-      // 2. Ártörténet mentése
+      // 2. Ártörténet mentése (Fixált RON árral)
       await supabase.from('prices').insert([{ material_id: materialId, invoice_id: invoiceId, unit_price: priceInRon }]);
       
       // 3. TANULÁS (Alias mentése)
@@ -202,14 +221,11 @@ export default function InvoiceMappingPage({ params }: PageProps) {
         { onConflict: 'alias_name' }
       );
 
-      // 4. MÁRKA TANULÁS (Ha az anyagnak nincs márkája, de a számlán volt)
-      // Ez biztosítja, hogy a katalógusba bekerüljön a márka, ha eddig hiányzott
+      // 4. MÁRKA TANULÁS
       if (item.brand) {
         const targetMaterial = materials.find(m => m.id === materialId);
-        // Ha az anyagnak még nincs márkája, mentsük el a számláról kapottat
         if (targetMaterial && !targetMaterial.brand) {
           await supabase.from('materials').update({ brand: item.brand }).eq('id', materialId);
-          // Helyi state frissítése is, hogy azonnal látszódjon a listában
           setMaterials(prev => prev.map(m => m.id === materialId ? { ...m, brand: item.brand } : m));
         }
       }
@@ -224,6 +240,16 @@ export default function InvoiceMappingPage({ params }: PageProps) {
       } : i));
     } else {
       alert('Hiba a tétel mentésekor: ' + error.message);
+    }
+  };
+
+  // Pénznem váltás kezelő
+  const handleCurrencyChange = (newCurrency: 'RON' | 'EUR' | 'HUF') => {
+    setCurrency(newCurrency);
+    if (newCurrency !== 'RON') {
+      fetchExchangeRate(newCurrency);
+    } else {
+      setExchangeRate(1);
     }
   };
 
@@ -274,10 +300,20 @@ export default function InvoiceMappingPage({ params }: PageProps) {
         </div>
 
         <div className="flex items-center gap-4">
+          <div className="flex flex-col items-end mr-4">
+             <span className="text-[9px] font-black text-[#b6b693] uppercase tracking-widest">Árfolyam</span>
+             <span className="text-xs font-bold text-[#2b251d]">{exchangeRate} RON</span>
+          </div>
           <div className="flex items-center gap-2 bg-[#f7f7f3] p-1 rounded-lg border border-[#e7e8dd]">
             <span className="px-2 text-[#c7c8ad]"><Coins size={14} /></span>
             {(['RON', 'EUR', 'HUF'] as const).map((c) => (
-              <button key={c} onClick={() => setCurrency(c)} className={`px-3 py-1 rounded-md text-[10px] font-black transition-all ${currency === c ? 'bg-white text-[#2b251d] shadow-sm' : 'text-[#b6b693] hover:text-[#5d5343]'}`}>{c}</button>
+              <button 
+                key={c} 
+                onClick={() => handleCurrencyChange(c)} 
+                className={`px-3 py-1 rounded-md text-[10px] font-black transition-all ${currency === c ? 'bg-white text-[#2b251d] shadow-sm' : 'text-[#b6b693] hover:text-[#5d5343]'}`}
+              >
+                {c}
+              </button>
             ))}
           </div>
         </div>
@@ -319,7 +355,6 @@ export default function InvoiceMappingPage({ params }: PageProps) {
                   <div>
                     <h3 className="font-bold text-[#2b251d] text-sm">{item.raw_name}</h3>
                     
-                    {/* ÚJ: Márka megjelenítése ha van */}
                     {item.brand && (
                       <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-black text-[#989168] uppercase tracking-wider">
                         <BadgeCheck size={12} /> {item.brand}
@@ -339,6 +374,9 @@ export default function InvoiceMappingPage({ params }: PageProps) {
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-black text-[#2b251d]">{(item.unit_price * exchangeRate).toLocaleString()} RON</p>
+                    {currency !== 'RON' && (
+                        <p className="text-[9px] text-[#b6b693] font-bold uppercase">{item.unit_price} {currency}</p>
+                    )}
                   </div>
                 </div>
 
@@ -364,7 +402,6 @@ export default function InvoiceMappingPage({ params }: PageProps) {
                       <button 
                         onClick={() => { 
                           setActiveItemForNewMaterial(item.id); 
-                          // Ha az AI talált márkát, előtöltjük a modalba
                           setNewMaterial({ name: item.raw_name, unit: 'db', brand: item.brand || '' }); 
                           setIsModalOpen(true); 
                         }} 
@@ -408,7 +445,6 @@ export default function InvoiceMappingPage({ params }: PageProps) {
                 {items.reduce((sum, it) => sum + (it.unit_price * exchangeRate * (it.quantity || 1)), 0).toLocaleString()} RON
               </span>
             </div>
-            {/* JAVÍTOTT NAVIGÁCIÓ: Client-side routing */}
             <button onClick={() => router.push('/')} className="w-full py-4 bg-[#989168] hover:bg-[#857b5a] text-white font-black uppercase tracking-[0.2em] rounded-xl transition-all shadow-xl shadow-[#989168]/20">
               Feldolgozás Befejezése
             </button>
@@ -432,7 +468,6 @@ export default function InvoiceMappingPage({ params }: PageProps) {
                 onChange={e => setNewMaterial({...newMaterial, name: e.target.value})} 
               />
               
-              {/* ÚJ: Márka input */}
               <input 
                 placeholder="Márka (pl. Baumit) - opcionális" 
                 className="w-full p-4 bg-[#f7f7f3] border border-[#e7e8dd] rounded-xl font-bold text-[#2b251d] focus:border-[#989168] outline-none text-sm" 

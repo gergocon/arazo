@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 
-// Segédfüggvény az újrapróbálkozáshoz
+// Segédfüggvény az újrapróbálkozáshoz (Rate Limit kezelés)
 async function generateWithRetry(ai: GoogleGenAI, params: any) {
   const MAX_RETRIES = 3;
   let lastError;
@@ -14,6 +14,7 @@ async function generateWithRetry(ai: GoogleGenAI, params: any) {
       lastError = error;
       const msg = error?.message || JSON.stringify(error);
       
+      // Különböző hibaformátumok ellenőrzése (429 = Too Many Requests)
       const isRateLimit = 
         error?.status === 429 || 
         error?.code === 429 || 
@@ -23,11 +24,12 @@ async function generateWithRetry(ai: GoogleGenAI, params: any) {
 
       if (isRateLimit || error?.status === 503) {
         if (attempt === MAX_RETRIES) break;
+        // Exponenciális várakozás: 2s, 4s, 8s...
         const delay = Math.pow(2, attempt) * 2000 + Math.random() * 1000;
         console.warn(`Gemini API Rate Limit (${attempt}/${MAX_RETRIES}). Újrapróbálkozás ${Math.round(delay)}ms múlva...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
-        throw error;
+        throw error; // Ha más a hiba (pl. érvénytelen kérés), ne próbálkozzunk újra
       }
     }
   }
@@ -36,46 +38,48 @@ async function generateWithRetry(ai: GoogleGenAI, params: any) {
 
 export async function POST(request: Request) {
   try {
-    const { invoiceId, storagePath } = await request.json();
+    const { quoteId, storagePath } = await request.json();
     
+    // API Kulcs ellenőrzése
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
       console.error("CRITICAL: API_KEY is missing from environment variables.");
-      throw new Error("Hiányzik a Google API Kulcs! Állítsd be az API_KEY változót a .env.local fájlban.");
+      return NextResponse.json(
+        { error: "Hiányzik a Google API Kulcs! Ellenőrizd a .env.local fájlt." },
+        { status: 500 }
+      );
     }
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // Fájl letöltése a Supabase-ből
+    // Fájl letöltése
     const { data: fileData, error: downloadError } = await supabase.storage.from('invoices').download(storagePath);
-    if (downloadError || !fileData) throw new Error("Fájl nem található vagy nem olvasható");
+    if (downloadError || !fileData) throw new Error("Fájl nem található");
 
     // Buffer konvertálása Base64 sztringgé
     const arrayBuffer = await fileData.arrayBuffer();
     const base64String = Buffer.from(arrayBuffer).toString('base64');
-    const mimeType = storagePath.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'; 
+    const mimeType = storagePath.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg';
 
-    // Séma definiálása a válaszhoz (Structured Output)
-    const invoiceSchema: Schema = {
+    // Séma definiálása a válaszhoz
+    const quoteSchema: Schema = {
       type: Type.OBJECT,
       properties: {
-        supplier_name: { type: Type.STRING, description: "The name of the company issuing the invoice." },
         items: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
-              raw_name: { type: Type.STRING, description: "The product name without the brand." },
-              brand: { type: Type.STRING, description: "The brand of the product if identified (e.g. Baumit, Rigips, Ytong). If not found, leave empty string." },
-              quantity: { type: Type.NUMBER, description: "The quantity of the item." },
-              unit_price: { type: Type.NUMBER, description: "The unit price of the item." },
-              raw_unit: { type: Type.STRING, description: "The unit of measurement (e.g. buc, m2, kg)." }
+              description: { type: Type.STRING, description: "Description of the work or material." },
+              quantity: { type: Type.NUMBER, description: "Quantity." },
+              unit: { type: Type.STRING, description: "Unit of measurement." },
+              unit_price: { type: Type.NUMBER, description: "Unit price if available, otherwise 0." }
             },
-            required: ["raw_name", "quantity", "unit_price", "raw_unit"]
+            required: ["description", "quantity", "unit"]
           }
         }
       },
-      required: ["supplier_name", "items"]
+      required: ["items"]
     };
 
     // AI Hívás (Retry logikával)
@@ -83,19 +87,19 @@ export async function POST(request: Request) {
       model: 'gemini-3-flash-preview',
       config: {
         responseMimeType: 'application/json',
-        responseSchema: invoiceSchema,
-        systemInstruction: `Építőipari számla elemző vagy.
-        A feladatod:
-        1. Keresd meg a számla kiállítóját (supplier_name).
-        2. Gyűjtsd ki a tételeket.
-        3. FONTOS: Ha a tétel nevében márkanevet találsz (pl. Baumit, Mapei, Rigips, Ytong, Brio, stb.), azt VÁLASZD LE a névről és tedd a "brand" mezőbe! A "raw_name" maradjon tiszta (márka nélküli, ha lehet).
-        Példa: "XPS 30mm BRIO" -> raw_name: "XPS 30mm", brand: "BRIO"`,
+        responseSchema: quoteSchema,
+        systemInstruction: `Építőipari költségvetés (Deviz) elemző vagy.
+        FELADAT:
+        Olvasd be a dokumentumot, és keresd meg a tételes listát (F3-as lista Romániában).
+        Gyűjtsd ki a tételeket strukturáltan.
+        Csak a konkrét munkatételeket és anyagokat gyűjtsd ki.
+        Ha a deviz tartalmaz anyagárat és munkadíjat külön, próbáld meg az anyagárat 'unit_price'-ként visszaadni.`,
       },
       contents: [
         {
           parts: [
             { inlineData: { mimeType: mimeType, data: base64String } },
-            { text: "Elemezd a csatolt számlát és vond ki az adatokat a megadott JSON formátumban." }
+            { text: "Elemezd a csatolt költségvetést és vond ki a tételeket." }
           ]
         }
       ]
@@ -106,34 +110,27 @@ export async function POST(request: Request) {
 
     const aiResult = JSON.parse(resultText);
 
-    // Számla adatainak frissítése (Beszállító + Státusz)
-    await supabase.from('invoices')
-      .update({ 
-        supplier_name: aiResult.supplier_name || 'Ismeretlen Beszállító',
-        status: 'processed' 
-      })
-      .eq('id', invoiceId);
-
-    // Tételek mentése
+    // Eredmények mentése
     if (aiResult.items && Array.isArray(aiResult.items)) {
       const itemsToInsert = aiResult.items.map((item: any) => ({
-        invoice_id: invoiceId,
-        raw_name: item.raw_name,
-        brand: item.brand || null,
+        quote_id: quoteId,
+        raw_text: item.description,
         quantity: item.quantity || 1,
-        unit_price: item.unit_price || 0,
-        raw_unit: item.raw_unit || 'buc', 
+        unit: item.unit || 'db',
+        deviz_unit_price: item.unit_price || 0,
         status: 'pending'
       }));
       
-      const { error: insertError } = await supabase.from('invoice_items').insert(itemsToInsert);
+      const { error: insertError } = await supabase.from('quote_items').insert(itemsToInsert);
       if (insertError) throw new Error("Hiba a tételek mentésekor: " + insertError.message);
+      
+      await supabase.from('quotes').update({ status: 'processed' }).eq('id', quoteId);
     }
 
     return NextResponse.json({ success: true });
 
   } catch (error: any) {
-    console.error("Processing Error:", error);
+    console.error("Quote Processing Error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
